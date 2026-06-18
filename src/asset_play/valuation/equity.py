@@ -12,7 +12,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Callable, Optional
 
-from ..domain.enums import ConfidenceGrade, FSType
+from ..domain.enums import ConfidenceGrade, FSType, LiquidityClass
 from ..domain.models import EquityHolding, EquityValuation, ValuationSnapshot
 from ..exceptions import InvariantViolation
 from ..sources.krx import PriceProvider
@@ -132,6 +132,7 @@ def value_equity_holdings(
                 market_value=market_value,
                 unrealized_gain=market_value - h.book_value,
                 confidence=ConfidenceGrade.HIGH,
+                liquidity=LiquidityClass.from_purpose(h.investment_purpose),  # AC-5
                 snapshot=snapshot,
                 warnings=warnings,
             )

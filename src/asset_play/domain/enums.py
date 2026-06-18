@@ -47,6 +47,26 @@ class AssetClass(str, Enum):
     OTHER = "other"
 
 
+class LiquidityClass(str, Enum):
+    """자산이 시장가치로 '풀릴 수 있는' 성격 (SPEC-NAV rev.3 AC-5)."""
+
+    REALIZABLE = "realizable"  # 투자부동산·단순투자 지분 → 매각/환원으로 unlock 가능
+    RECOGNITION_ONLY = "recognition"  # 영업용 토지·경영참여 지분 → 인식으로만 re-rating
+    UNKNOWN = "unknown"
+
+    @classmethod
+    def from_purpose(cls, purpose: str | None) -> "LiquidityClass":
+        """타법인출자현황 출자목적(invstmnt_purps) → 분류. 단순투자=realizable, 경영참여=recognition."""
+        if not purpose:
+            return cls.UNKNOWN
+        p = str(purpose).replace(" ", "")
+        if "단순" in p:
+            return cls.REALIZABLE
+        if "경영" in p or "참여" in p or "참가" in p:
+            return cls.RECOGNITION_ONLY
+        return cls.UNKNOWN
+
+
 class Tier(str, Enum):
     TIER1 = "tier1"  # 완전 자동 (상장 지분)
     TIER2 = "tier2"  # 반자동 (토지)

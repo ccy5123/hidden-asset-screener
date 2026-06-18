@@ -6,17 +6,25 @@
 >
 > 대표 원형: **한신전기철도** — 고시엔 구장이 1924년 취득원가(원가모형)로 장부에 남아 시가와 수천 배 괴리.
 
-## 무엇을 계산하나
+## 무엇을 계산하나 (SPEC-NAV-001 rev.3)
 
-종목별로 자산군의 **장부가 ↔ 추정시가** 괴리를 합산해 미실현이익(含み益)을 구하고,
-이연법인세를 보정한 **세후 net surplus**와 시가총액 대비 비율 **`surplus_ratio`** 로 랭킹한다.
-`surplus_ratio`가 높을수록 시장이 숨은 자산을 반영하지 못한 후보(특히 *holdco discount*).
+종목별로 자산군의 **장부가 ↔ 추정시가** 괴리를 합산해 세후 미실현이익을 구하고, 이를
+**별도(OFS) 자기자본에 더한 재평가 NAV(`revalued_nav`) 대비 시장가 할인(`nav_discount`)** 을
+1차 신호로 랭킹한다. 단순 '숨은 차익 크기'가 아니라 *자산 대비 저평가*(자산가치주)를 본다.
 
 ```
-surplus_ratio = net_surplus / 시가총액
-net_surplus   = 미실현이익_총(세전) × (1 − 법인세율)
-미실현이익_총  = Σ(지분 + 토지 + 투자부동산 + 기타)
+total_pretax  = Σ(지분 + 토지 + 투자부동산 + 기타)        # asset_id 이중계상 제거
+total_posttax = total_pretax × (1 − 법인세율)  if > 0 else total_pretax   # 손실엔 환급 가정 안 함
+revalued_nav  = 별도(OFS)_자본총계 + total_posttax
+nav_discount  = 1 − 시가총액 / revalued_nav              # >0 → NAV 대비 할인(쌈), 1차 신호
+surplus_ratio = total_posttax / 시가총액                 # 보조 지표
 ```
+
+- **OFS 기준 통일**: 자기자본·보유지분·토지 surplus 모두 별도(OFS). 연결 지배주주지분을 쓰면
+  자회사 잉여가 이중계상되어 `revalued_nav` 과대 → 가짜 '싼' 신호.
+- **영업용 vs 실현가능 분류**: 투자부동산·단순투자 지분 → `realizable`(매각·환원으로 unlock 가능),
+  영업용 토지·경영참여 지분 → `recognition_only`(인식으로만 re-rating). recognition-only + 무카탈리스트
+  = value trap 경계. (저신뢰 분류는 `manual_override`로 보수 처리.)
 
 ## 2단계 파이프라인 (자동화 수준이 자산군마다 다름)
 

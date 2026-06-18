@@ -75,6 +75,7 @@ class FakeDart:
         name_to_stock=None,
         name_to_corp=None,
         net_assets_by_corp=None,
+        separate_equity_by_corp=None,
     ):
         self.company = company
         self.holdings = holdings
@@ -82,6 +83,7 @@ class FakeDart:
         self.name_to_stock = name_to_stock or {}
         self.name_to_corp = name_to_corp or {}
         self.net_assets_by_corp = net_assets_by_corp or {}
+        self.separate_equity_by_corp = separate_equity_by_corp or {}
 
     def corp_code_for_stock(self, stock_code):
         return self.stock_to_corp.get(stock_code)
@@ -100,3 +102,6 @@ class FakeDart:
 
     def get_net_assets(self, corp_code, bsns_year, reprt_code):
         return self.net_assets_by_corp.get(corp_code)
+
+    def get_separate_total_equity(self, corp_code, bsns_year, reprt_code):
+        return self.separate_equity_by_corp.get(corp_code)

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from .aggregate.nav import aggregate_nav, make_investment_property_item
-from .aggregate.rank import rank_by_net_surplus
+from .aggregate.rank import rank_by_nav_discount
 from .cache import CacheStore
 from .config import Config
 from .domain.models import Company, LandAsset, NAVResult
@@ -178,11 +178,20 @@ class Pipeline:
             else:
                 warnings.append(f"토지 제외: {screen.exclude_reason}")
 
+        # 별도(OFS) 자본총계 — basis-consistent equity for revalued NAV (SPEC-NAV rev.3).
+        try:
+            reported_book_equity = self.dart.get_separate_total_equity(
+                corp_code, bsns_year, reprt_code
+            )
+        except SourceError:
+            reported_book_equity = None
+
         nav = aggregate_nav(
             company,
             valuations,
             tax_rate=self.config.corporate_tax_rate,
             correction_factor=self.config.land_price_correction_factor,
+            reported_book_equity=reported_book_equity,
             review_queue_count=len(review_queue),
             as_of=as_of,
         )
@@ -225,7 +234,7 @@ class Pipeline:
             run.review_queue.extend(review)
             run.unresolved.extend(unresolved)
 
-        run.results = rank_by_net_surplus(run.results)
+        run.results = rank_by_nav_discount(run.results)
         run.unresolved = _rank_unresolved(run.unresolved)
         return run
 

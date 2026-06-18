@@ -42,6 +42,7 @@ def _build_pipeline():
         name_to_stock={"상장자회사A": "000270", "상장관계사B": "005930"},
         name_to_corp={"비상장C": "0000UNLC"},
         net_assets_by_corp={"0000UNLC": Decimal("20000000000")},
+        separate_equity_by_corp={"0000HOLD": Decimal("50000000000")},  # 별도(OFS) 자본총계 500억
     )
     provider = StaticPriceProvider(
         prices={"000270": Decimal("50000"), "005930": Decimal("80000")},
@@ -94,6 +95,28 @@ def test_unresolved_report_collected_and_ranked():
     assert "상장자회사A" not in names  # resolved → not reported
     books = [book for _, book, _ in run.unresolved]
     assert books == sorted(books, reverse=True)  # ranked by book value desc
+
+
+def test_revalued_nav_uses_separate_ofs_equity():  # SPEC-NAV rev.3 AC-4 (golden, no double-count)
+    # Holdco with a consolidated subsidiary + 비지배지분: revalued_nav MUST use 별도(OFS)
+    # 자본총계 — consolidated equity would double-count subsidiary surplus.
+    pipe = _build_pipeline()
+    nav = pipe.run(stock_codes=["000001"]).results[0]
+    assert nav.reported_book_equity == Decimal("50000000000")  # 별도 OFS, not consolidated
+    assert nav.revalued_nav == Decimal("50000000000") + nav.net_surplus
+    # 별도 자본총계 500억 + 세후 366.6억 = 866.6억
+    assert nav.revalued_nav == Decimal("86660000000")
+
+
+def test_rank_by_nav_discount_primary_na_last():  # AC-6
+    from asset_play.aggregate.rank import rank_by_nav_discount
+    from asset_play.domain.models import NAVResult
+
+    a = NAVResult(corp_code="a", name="A", nav_discount=Decimal("0.1"), surplus_ratio=Decimal("0.5"))
+    b = NAVResult(corp_code="b", name="B", nav_discount=Decimal("0.4"), surplus_ratio=Decimal("0.2"))
+    c = NAVResult(corp_code="c", name="C", nav_discount=None, surplus_ratio=Decimal("0.9"))  # N/A last
+    ranked = rank_by_nav_discount([a, b, c])
+    assert [r.corp_code for r in ranked] == ["b", "a", "c"]
 
 
 def test_rank_unresolved_dedupes_by_name_keeping_max_book():

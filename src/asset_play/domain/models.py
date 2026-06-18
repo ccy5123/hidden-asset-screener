@@ -13,7 +13,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .enums import AssetClass, ConfidenceGrade, FSType, Market, MeasurementModel
+from .enums import AssetClass, ConfidenceGrade, FSType, LiquidityClass, Market, MeasurementModel
 
 
 class _Base(BaseModel):
@@ -58,6 +58,7 @@ class EquityHolding(_Base):
     acquisition_cost: Optional[Decimal] = None  # 원
     book_value: Decimal = Decimal(0)  # 원 — 지분법 or 원가법 계상액
     accounting_method: Optional[str] = None  # "지분법" | "원가법"
+    investment_purpose: Optional[str] = None  # 출자목적 (invstmnt_purps): 경영참여 / 단순투자
     fs_type: FSType = FSType.SEPARATE
     source: Optional[str] = None
     as_of_date: Optional[date] = None
@@ -93,6 +94,7 @@ class EquityValuation(_Base):
     market_value: Decimal  # 원
     unrealized_gain: Decimal  # 원 (market − book)
     confidence: ConfidenceGrade = ConfidenceGrade.HIGH
+    liquidity: LiquidityClass = LiquidityClass.UNKNOWN  # AC-5
     snapshot: ValuationSnapshot
     warnings: list[str] = Field(default_factory=list)
 
@@ -107,6 +109,7 @@ class UnlistedValuation(_Base):
     market_value: Decimal  # 원 (approx; == book_value when unvalued)
     unrealized_gain: Decimal  # 원
     confidence: ConfidenceGrade = ConfidenceGrade.LOW
+    liquidity: LiquidityClass = LiquidityClass.UNKNOWN  # AC-5
     snapshot: ValuationSnapshot
     unvalued: bool = False
     warnings: list[str] = Field(default_factory=list)
@@ -147,6 +150,7 @@ class PreciseLandValuation(_Base):
     market_value: Decimal  # 원
     unrealized_gain: Decimal  # 원
     confidence: ConfidenceGrade = ConfidenceGrade.MEDIUM
+    liquidity: LiquidityClass = LiquidityClass.RECOGNITION_ONLY  # 영업용 토지 → 인식형 (AC-5)
     snapshot: ValuationSnapshot
 
 
@@ -186,10 +190,16 @@ class NAVResult(_Base):
     as_of_date: Optional[date] = None
 
     by_class: dict[AssetClass, ClassAggregate] = Field(default_factory=dict)
-    total_unrealized_pretax: Decimal = Decimal(0)  # 원
+    total_unrealized_pretax: Decimal = Decimal(0)  # 원 (세전; 이중계상 제거 후)
     tax_rate: Decimal = Decimal("0.22")
-    net_surplus: Decimal = Decimal(0)  # 원 (after-tax)
-    surplus_ratio: Optional[Decimal] = None  # net_surplus / market_cap
+    total_unrealized_posttax: Decimal = Decimal(0)  # 원 (세후; SPEC-NAV rev.3)
+    net_surplus: Decimal = Decimal(0)  # = total_unrealized_posttax (alias, back-compat)
+    reported_book_equity: Optional[Decimal] = None  # 별도(OFS) 자본총계 — surplus와 동일 기준
+    revalued_nav: Optional[Decimal] = None  # reported_book_equity + total_unrealized_posttax
+    nav_discount: Optional[Decimal] = None  # 1 − market_cap / revalued_nav (1차 신호); ≤0 NAV → None
+    realizable_surplus: Decimal = Decimal(0)  # 실현가능 자산 세전 소계 (AC-5)
+    recognition_only_surplus: Decimal = Decimal(0)  # 인식형 자산 세전 소계 (AC-5)
+    surplus_ratio: Optional[Decimal] = None  # 보조: total_unrealized_posttax / market_cap
     overall_confidence: Optional[ConfidenceGrade] = None
 
     assumptions: dict[str, str] = Field(default_factory=dict)

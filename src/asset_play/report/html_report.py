@@ -9,7 +9,7 @@ from typing import Optional, Union
 
 from jinja2 import Environment, select_autoescape
 
-from ..aggregate.rank import rank_by_net_surplus
+from ..aggregate.rank import rank_by_nav_discount
 from ..domain.enums import AssetClass
 from ..domain.models import NAVResult
 
@@ -38,12 +38,14 @@ _TEMPLATE = """<!DOCTYPE html>
 </style></head><body>
 <h1>Asset-Play Screener — 숨은 자산가치(含み資産) 랭킹</h1>
 <div class="meta">생성: {{ generated }} · 종목 수: {{ rows|length }} ·
- net_surplus = 미실현이익_총 × (1 − 법인세율) · surplus_ratio = net_surplus / 시가총액</div>
+ nav_discount = 1 − 시총 / revalued_nav (1차 신호) · revalued_nav = 별도자본총계 + 세후잉여 ·
+ surplus_ratio = 세후잉여 / 시총 (보조)</div>
 <table>
 <thead><tr>
- <th>#</th><th>종목</th><th>시장</th><th>시가총액</th>
+ <th>#</th><th>종목</th><th>시장</th><th>시가총액</th><th>revalued_nav</th><th>nav_discount</th>
  <th>상장지분</th><th>토지</th><th>투자부동산</th><th>비상장</th>
- <th>미실현이익(세전)</th><th>net_surplus(세후)</th><th>surplus_ratio</th>
+ <th>실현가능</th><th>인식형</th>
+ <th>세전</th><th>세후</th><th>surplus_ratio</th>
  <th>신뢰도</th><th>검토큐</th><th>근거</th>
 </tr></thead>
 <tbody>
@@ -53,10 +55,14 @@ _TEMPLATE = """<!DOCTYPE html>
  <td class="l">{{ r.name }}{% if r.stock_code %} <small>({{ r.stock_code }})</small>{% endif %}</td>
  <td>{{ r.market }}</td>
  <td>{{ r.market_cap }}</td>
+ <td>{{ r.revalued_nav }}</td>
+ <td>{{ r.nav_discount }}</td>
  <td>{{ r.equity_gain }}</td>
  <td>{{ r.land_gain }}</td>
  <td>{{ r.ip_gain }}</td>
  <td>{{ r.unlisted_gain }}</td>
+ <td>{{ r.realizable }}</td>
+ <td>{{ r.recognition }}</td>
  <td>{{ r.pretax }}</td>
  <td class="{{ 'neg' if r.net_surplus_neg }}">{{ r.net_surplus }}</td>
  <td>{{ r.surplus_ratio }}</td>
@@ -89,10 +95,14 @@ def _view(r: NAVResult) -> dict:
         "stock_code": r.stock_code or "",
         "market": r.market.value,
         "market_cap": f"{r.market_cap:,}" if r.market_cap is not None else "—",
+        "revalued_nav": f"{r.revalued_nav:,}" if r.revalued_nav is not None else "—",
+        "nav_discount": f"{r.nav_discount:.1%}" if r.nav_discount is not None else "—",
         "equity_gain": f"{_class_gain(r, AssetClass.EQUITY):,}",
         "land_gain": f"{_class_gain(r, AssetClass.LAND):,}",
         "ip_gain": f"{_class_gain(r, AssetClass.INVESTMENT_PROPERTY):,}",
         "unlisted_gain": f"{_class_gain(r, AssetClass.UNLISTED_EQUITY):,}",
+        "realizable": f"{r.realizable_surplus:,}",
+        "recognition": f"{r.recognition_only_surplus:,}",
         "pretax": f"{r.total_unrealized_pretax:,}",
         "net_surplus": f"{r.net_surplus:,}",
         "net_surplus_neg": r.net_surplus < 0,
@@ -116,7 +126,7 @@ def _view(r: NAVResult) -> dict:
 def render_html(results: list[NAVResult], *, generated: Optional[str] = None) -> str:
     env = Environment(autoescape=select_autoescape(["html"]))
     template = env.from_string(_TEMPLATE)
-    ordered = rank_by_net_surplus(results)
+    ordered = rank_by_nav_discount(results)
     return template.render(
         rows=[_view(r) for r in ordered],
         generated=generated or date.today().isoformat(),

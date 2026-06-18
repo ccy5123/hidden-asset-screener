@@ -152,10 +152,17 @@ def extract_account_amount(
     *,
     field: str = "thstrm_amount",
     unit: MoneyUnit = MoneyUnit.WON,
+    sj_div: Optional[str] = None,
 ) -> Optional[Decimal]:
-    """Pull an amount (in 원) for the first matching ``account_nm`` from fnlttSinglAcntAll rows."""
+    """Pull an amount (in 원) for the first matching ``account_nm`` from fnlttSinglAcntAll rows.
+
+    Pass ``sj_div`` (e.g. "BS") to restrict to one statement — names like 자본총계 and
+    지배기업소유주지분 recur across BS/SCE/CIS, so the statement filter avoids false matches.
+    """
     targets = {n.replace(" ", "") for n in account_names}
     for r in rows:
+        if sj_div is not None and (r.get("sj_div") or "") != sj_div:
+            continue
         nm = (r.get("account_nm") or "").replace(" ", "")
         if nm in targets:
             return to_won(r.get(field), unit)
@@ -378,6 +385,7 @@ class DartClient(HttpSource):
             ownership_ratio=to_decimal(row.get("trmend_blce_qota_rt")),
             book_value=to_won(row.get("trmend_blce_acntbk_amount"), unit) or Decimal(0),
             acquisition_cost=to_won(row.get("frst_acqs_amount"), unit),
+            investment_purpose=(row.get("invstmnt_purps") or "").strip() or None,
             fs_type=FSType.SEPARATE,  # 타법인출자현황 is reported on a separate basis
             source="DART:otrCprInvstmntSttus",
         )
@@ -414,3 +422,16 @@ class DartClient(HttpSource):
         if not rows:
             return None
         return extract_account_amount(rows, ["자본총계", "자본 총계"])
+
+    def get_separate_total_equity(
+        self, corp_code: str, bsns_year: str, reprt_code: str = REPORT_ANNUAL
+    ) -> Optional[Decimal]:
+        """별도(OFS) 자본총계 (BS), 원 — reported_book_equity for revalued NAV (SPEC-NAV rev.3).
+
+        OFS basis matches the 별도 cost-basis used for holdings surplus; consolidated
+        controlling-interest equity would double-count subsidiary retained earnings.
+        """
+        rows = self.get_financial_statements(corp_code, bsns_year, reprt_code, fs_div="OFS")
+        if not rows:
+            return None
+        return extract_account_amount(rows, ["자본총계", "자본 총계"], sj_div="BS")

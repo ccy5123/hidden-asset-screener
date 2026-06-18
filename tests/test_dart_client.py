@@ -72,6 +72,7 @@ def test_get_other_corp_investments_parses_separate_fs():
                 "trmend_blce_qota_rt": "30.0",
                 "trmend_blce_acntbk_amount": "10,000,000,000",
                 "frst_acqs_amount": "8,000,000,000",
+                "invstmnt_purps": "경영참가",
             }
         ],
     }
@@ -83,6 +84,7 @@ def test_get_other_corp_investments_parses_separate_fs():
     assert h.investee_name == "상장자회사"
     assert h.shares == Decimal("1000000")
     assert h.book_value == Decimal("10000000000")
+    assert h.investment_purpose == "경영참가"  # 출자목적 parsed (AC-5)
     assert h.fs_type == FSType.SEPARATE  # invariant #1
 
 
@@ -111,6 +113,21 @@ def test_get_other_corp_investments_drops_summary_rows():
 def test_no_data_status_returns_empty():
     session = FakeSession([FakeResponse(json_data={"status": "013", "message": "데이터없음"})])
     assert _dart(session).get_other_corp_investments("x", "2024") == []
+
+
+def test_separate_total_equity_uses_ofs_bs():  # SPEC-NAV-001 rev.3 AC-4
+    payload = {
+        "status": "000",
+        "list": [
+            {"sj_div": "BS", "account_nm": "자본총계", "thstrm_amount": "500,000,000,000"},
+            {"sj_div": "SCE", "account_nm": "자본총계", "thstrm_amount": "999,000,000,000"},
+        ],
+    }
+    session = FakeSession([FakeResponse(json_data=payload)])
+    dart = _dart(session)
+    assert dart.get_separate_total_equity("00126380", "2024") == Decimal("500000000000")  # BS, not SCE
+    _url, params = session.calls[0]
+    assert params["fs_div"] == "OFS"  # separate FS, not consolidated
 
 
 @pytest.mark.parametrize(

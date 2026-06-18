@@ -9,7 +9,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from ..domain.enums import ConfidenceGrade
+from ..domain.enums import ConfidenceGrade, LiquidityClass
 from ..domain.models import EquityHolding, UnlistedValuation, ValuationSnapshot
 
 
@@ -31,6 +31,7 @@ def value_unlisted_holding(
             market_value=holding.book_value,
             unrealized_gain=Decimal(0),
             confidence=ConfidenceGrade.LOW,
+            liquidity=LiquidityClass.from_purpose(holding.investment_purpose),  # AC-5
             unvalued=True,
             snapshot=ValuationSnapshot(
                 source="acquisition_cost",
@@ -50,6 +51,7 @@ def value_unlisted_holding(
         market_value=market_value,
         unrealized_gain=market_value - holding.book_value,
         confidence=ConfidenceGrade.LOW,
+        liquidity=LiquidityClass.from_purpose(holding.investment_purpose),  # AC-5
         unvalued=False,
         snapshot=ValuationSnapshot(
             source=source,
