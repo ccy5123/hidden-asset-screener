@@ -331,7 +331,7 @@ def build_company_report(pipe, stock_code: str, *, bsns_year=None,
     """
     bsns_year = bsns_year or str(date.today().year - 1)
     try:
-        cc = pipe.dart.corp_code_for_stock(stock_code)
+        cc = pipe.adapter.corp_code_for_stock(stock_code)
     except Exception:
         cc = None
     if not cc:
@@ -339,7 +339,7 @@ def build_company_report(pipe, stock_code: str, *, bsns_year=None,
     land_assets = list((land_assets_by_corp or {}).get(cc) or [])
     if auto_land:
         try:
-            ipfv = pipe.dart.get_investment_property_fair_value(cc, bsns_year)
+            ipfv = pipe.adapter.get_investment_property_fair_value(cc, bsns_year)
         except Exception:
             ipfv = None
         if ipfv and ipfv.reconciled and ipfv.inject_fair and ipfv.inject_fair > 0:
@@ -356,8 +356,8 @@ def build_company_report(pipe, stock_code: str, *, bsns_year=None,
     # 1차 스크린 지표 (연결 CFS) — 보고서 상단 진입필터 표시 (책 1단계)
     screen = None
     try:
-        company = pipe.dart.get_company(cc)
-        eq_ctrl, eq_total, assets, ni = pipe.dart.get_screen_financials(cc, bsns_year)
+        company = pipe.adapter.get_company(cc)
+        eq_ctrl, eq_total, assets, ni = pipe.adapter.get_screen_financials(cc, bsns_year)
         screen = compute_screen_metrics(
             name=nav.name, stock_code=nav.stock_code or stock_code, market_cap=nav.market_cap,
             equity_controlling=eq_ctrl, equity_total=eq_total, assets_total=assets, net_income=ni,

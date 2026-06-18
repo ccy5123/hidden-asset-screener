@@ -75,16 +75,16 @@ def value_screen(pipe, stock_codes, *, bsns_year=None, **thresholds):
     out = []
     for sc in stock_codes:
         try:
-            cc = pipe.dart.corp_code_for_stock(sc)
+            cc = pipe.adapter.corp_code_for_stock(sc)
         except Exception:
             cc = None
         if not cc:
             continue
-        company = pipe.dart.get_company(cc)
-        eq_ctrl, eq_total, assets, ni = pipe.dart.get_screen_financials(cc, bsns_year)
+        company = pipe.adapter.get_company(cc)
+        eq_ctrl, eq_total, assets, ni = pipe.adapter.get_screen_financials(cc, bsns_year)
         m = compute_screen_metrics(
             name=(company.name if company else sc), stock_code=sc,
-            market_cap=pipe.price_provider.get_market_cap(sc),
+            market_cap=pipe.adapter.get_market_cap(sc),
             equity_controlling=eq_ctrl, equity_total=eq_total, assets_total=assets, net_income=ni,
             founded_year=(company.establishment_year if company else None),
         )

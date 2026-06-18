@@ -25,6 +25,7 @@ from .domain.models import Company, LandAsset, NAVResult
 from .exceptions import QuotaExceededError, SourceError
 from .report.csv_report import write_csv
 from .report.html_report import write_html
+from .sources.adapter import KrAdapter, MarketAdapter
 from .sources.dart_client import REPORT_ANNUAL, DartClient
 from .sources.juso import JusoClient
 from .sources.krx import KrxClient, PriceProvider
@@ -71,12 +72,16 @@ class Pipeline:
         price_provider: Optional[PriceProvider] = None,
         geocoder: Optional[Geocoder] = None,
         land_price_provider: Optional[LandPriceProvider] = None,
+        adapter: Optional[MarketAdapter] = None,
         cache: Optional[CacheStore] = None,
     ) -> None:
         self.config = config or Config()
         self.cache = cache or CacheStore(str(self.config.cache_dir / "asset_play.sqlite"))
         self.dart = dart or DartClient(self.config, cache=self.cache)
         self.price_provider = price_provider or KrxClient(self.config, cache=self.cache)
+        # Multi-market seam (SPEC-ADAPTER-001): the core talks to self.adapter, not self.dart
+        # directly. Default = KrAdapter wrapping the Korean stack (behavior-preserving).
+        self.adapter: MarketAdapter = adapter or KrAdapter(self.dart, self.price_provider)
         # Auto-wire the land providers. Geocoder: juso(도로명→정확 지번) + V-World(지번) 합성 —
         # juso 먼저, 지번주소는 V-World가 보완. 공시지가·면적(MOLIT)은 VWORLD_KEY로 인증.
         if geocoder is not None:
@@ -106,7 +111,7 @@ class Pipeline:
     ) -> list[tuple[str, Optional[str]]]:
         targets: list[tuple[str, Optional[str]]] = []
         for sc in stock_codes or []:
-            cc = self.dart.corp_code_for_stock(sc)
+            cc = self.adapter.corp_code_for_stock(sc)
             if cc:
                 targets.append((cc, sc))
         for cc in corp_codes or []:
@@ -114,14 +119,14 @@ class Pipeline:
         return targets
 
     def _company_for(self, corp_code: str, stock_code: Optional[str], as_of: date) -> Company:
-        company = self.dart.get_company(corp_code) or Company(
+        company = self.adapter.get_company(corp_code) or Company(
             corp_code=corp_code, stock_code=stock_code, name=corp_code
         )
         if stock_code and not company.stock_code:
             company.stock_code = stock_code
         company.as_of_date = as_of
         if company.stock_code:
-            company.market_cap = self.price_provider.get_market_cap(company.stock_code)
+            company.market_cap = self.adapter.get_market_cap(company.stock_code)
         return company
 
     def value_company(
@@ -135,16 +140,16 @@ class Pipeline:
         as_of: Optional[date] = None,
         compute_catalyst: bool = False,
     ) -> tuple[NAVResult, list, list, list]:
-        as_of = as_of or self.price_provider.as_of()
+        as_of = as_of or self.adapter.price_as_of()
         company = self._company_for(corp_code, stock_code, as_of)
 
-        holdings = self.dart.get_other_corp_investments(corp_code, bsns_year, reprt_code)
+        holdings = self.adapter.get_other_corp_investments(corp_code, bsns_year, reprt_code)
 
         equity = value_equity_holdings(
             holdings,
             self.price_provider,
-            resolve_stock_code=lambda h: self.dart.stock_code_for_name(h.investee_name),
-            investee_market_cap=self.price_provider.get_market_cap,
+            resolve_stock_code=lambda h: self.adapter.stock_code_for_name(h.investee_name),
+            investee_market_cap=self.adapter.get_market_cap,
             as_of=as_of,
         )
 
@@ -154,11 +159,11 @@ class Pipeline:
 
         # Tier 3: unlisted holdings → net-asset approximation.
         for h in equity.tier3_queue:
-            investee_cc = h.investee_corp_code or self.dart.corp_code_for_name(h.investee_name)
+            investee_cc = h.investee_corp_code or self.adapter.corp_code_for_name(h.investee_name)
             net_assets = None
             if investee_cc:
                 try:
-                    net_assets = self.dart.get_net_assets(investee_cc, bsns_year, reprt_code)
+                    net_assets = self.adapter.get_net_assets(investee_cc, bsns_year, reprt_code)
                 except SourceError:
                     net_assets = None
             valuations.append(value_unlisted_holding(h, net_assets=net_assets, as_of=as_of))
@@ -199,7 +204,7 @@ class Pipeline:
 
         # 별도(OFS) 자본총계 — basis-consistent equity for revalued NAV (SPEC-NAV rev.3).
         try:
-            reported_book_equity = self.dart.get_separate_total_equity(
+            reported_book_equity = self.adapter.get_separate_total_equity(
                 corp_code, bsns_year, reprt_code
             )
         except SourceError:
@@ -220,7 +225,7 @@ class Pipeline:
         if compute_catalyst:
             bgn, end = f"{int(bsns_year)}0101", f"{int(bsns_year) + 2}1231"
             try:
-                sig = catalyst_signals(self.dart.get_disclosures(corp_code, bgn, end))
+                sig = catalyst_signals(self.adapter.get_disclosures(corp_code, bgn, end))
             except SourceError:
                 sig = CatalystSignals()
             nav.catalyst_score = catalyst_score(sig)
