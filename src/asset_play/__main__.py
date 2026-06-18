@@ -111,6 +111,7 @@ def _cmd_screen(args: argparse.Namespace) -> int:
         corp_codes=corp_codes,
         bsns_year=args.year,
         land_assets_by_corp=land_by_corp,
+        compute_catalyst=args.catalyst,
     )
     print(f"ranked {len(run.results)} companies")
     if run.quota_exhausted:
@@ -160,6 +161,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--land-file",
         dest="land_file",
         help="토지 자산 파일 (.json/.csv) — 검토된 투자부동산/토지 값 주입 (human-in-loop)",
+    )
+    screen.add_argument(
+        "--catalyst",
+        action="store_true",
+        help="카탈리스트 점수 산출 (밸류업·자사주·배당 공시 검색, 종목당 DART 호출 +1)",
     )
     screen.add_argument("--out", default="out", help="출력 디렉터리 (기본: out)")
     screen.set_defaults(func=_cmd_screen)

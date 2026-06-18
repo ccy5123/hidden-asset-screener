@@ -201,6 +201,8 @@ class NAVResult(_Base):
     recognition_only_surplus: Decimal = Decimal(0)  # 인식형 자산 세전 소계 (AC-5)
     surplus_ratio: Optional[Decimal] = None  # 보조: total_unrealized_posttax / market_cap
     overall_confidence: Optional[ConfidenceGrade] = None
+    catalyst_score: Optional[Decimal] = None  # SPEC-CATALYST-001 (None = --catalyst 미사용)
+    catalyst_value_trap: bool = False  # 高할인 + 인식형 + 무카탈리스트
 
     assumptions: dict[str, str] = Field(default_factory=dict)
     evidence: list[ValuationSnapshot] = Field(default_factory=list)

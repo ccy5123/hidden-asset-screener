@@ -435,3 +435,21 @@ class DartClient(HttpSource):
         if not rows:
             return None
         return extract_account_amount(rows, ["자본총계", "자본 총계"], sj_div="BS")
+
+    def get_disclosures(self, corp_code: str, bgn_de: str, end_de: str) -> list[dict]:
+        """DART 공시 목록 (list.json), YYYYMMDD 범위 — 카탈리스트 신호용 (SPEC-CATALYST-001)."""
+        data = self.get_json(
+            f"{BASE_URL}/list.json",
+            params={
+                "crtfc_key": self._key(),
+                "corp_code": corp_code,
+                "bgn_de": bgn_de,
+                "end_de": end_de,
+                "page_count": "100",
+            },
+            namespace="dart:list",
+            cache_key=f"{corp_code}:{bgn_de}:{end_de}",
+        )
+        if not self._check_status(data):
+            return []
+        return data.get("list", [])

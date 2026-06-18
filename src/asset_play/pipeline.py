@@ -29,6 +29,12 @@ from .sources.dart_client import REPORT_ANNUAL, DartClient
 from .sources.krx import KrxClient, PriceProvider
 from .sources.molit import LandPriceProvider, MolitClient
 from .sources.vworld import Geocoder, VWorldClient
+from .valuation.catalyst import (
+    CatalystSignals,
+    catalyst_score,
+    catalyst_signals,
+    is_value_trap,
+)
 from .valuation.equity import value_equity_holdings
 from .valuation.land_precise import value_land_precise
 from .valuation.land_screen import screen_land
@@ -115,7 +121,8 @@ class Pipeline:
         reprt_code: str = REPORT_ANNUAL,
         land_assets: Optional[list[LandAsset]] = None,
         as_of: Optional[date] = None,
-    ) -> tuple[NAVResult, list]:
+        compute_catalyst: bool = False,
+    ) -> tuple[NAVResult, list, list]:
         as_of = as_of or self.price_provider.as_of()
         company = self._company_for(corp_code, stock_code, as_of)
 
@@ -196,6 +203,19 @@ class Pipeline:
             as_of=as_of,
         )
         nav.warnings.extend(warnings)
+
+        # SPEC-CATALYST-001 (opt-in): 공시 신호로 catalyst_score + value-trap 플래그.
+        if compute_catalyst:
+            bgn, end = f"{int(bsns_year)}0101", f"{int(bsns_year) + 2}1231"
+            try:
+                sig = catalyst_signals(self.dart.get_disclosures(corp_code, bgn, end))
+            except SourceError:
+                sig = CatalystSignals()
+            nav.catalyst_score = catalyst_score(sig)
+            if is_value_trap(nav.nav_discount, nav.realizable_surplus, nav.catalyst_score):
+                nav.catalyst_value_trap = True
+                nav.warnings.append("value trap 경계: 인식형 자산 + 무카탈리스트")
+
         unresolved = [(h.investee_name, h.book_value, company.name) for h in equity.tier3_queue]
         return nav, review_queue, unresolved
 
@@ -208,6 +228,7 @@ class Pipeline:
         reprt_code: str = REPORT_ANNUAL,
         land_assets_by_corp: Optional[dict[str, list[LandAsset]]] = None,
         as_of: Optional[date] = None,
+        compute_catalyst: bool = False,
     ) -> PipelineRun:
         bsns_year = bsns_year or str(date.today().year - 1)
         land_assets_by_corp = land_assets_by_corp or {}
@@ -222,6 +243,7 @@ class Pipeline:
                     reprt_code=reprt_code,
                     land_assets=land_assets_by_corp.get(corp_code),
                     as_of=as_of,
+                    compute_catalyst=compute_catalyst,
                 )
             except QuotaExceededError as exc:  # AC-4: stop, preserve partial results
                 run.quota_exhausted = True

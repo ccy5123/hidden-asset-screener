@@ -46,7 +46,7 @@ _TEMPLATE = """<!DOCTYPE html>
  <th>상장지분</th><th>토지</th><th>투자부동산</th><th>비상장</th>
  <th>실현가능</th><th>인식형</th>
  <th>세전</th><th>세후</th><th>surplus_ratio</th>
- <th>신뢰도</th><th>검토큐</th><th>근거</th>
+ <th>카탈리스트</th><th>신뢰도</th><th>검토큐</th><th>근거</th>
 </tr></thead>
 <tbody>
 {% for r in rows %}
@@ -66,6 +66,7 @@ _TEMPLATE = """<!DOCTYPE html>
  <td>{{ r.pretax }}</td>
  <td class="{{ 'neg' if r.net_surplus_neg }}">{{ r.net_surplus }}</td>
  <td>{{ r.surplus_ratio }}</td>
+ <td class="{{ 'neg' if r.value_trap }}">{{ r.catalyst }}</td>
  <td class="grade-{{ r.confidence }}">{{ r.confidence }}</td>
  <td>{{ r.review_queue_count }}</td>
  <td class="l"><details><summary>{{ r.evidence|length }} sources</summary>
@@ -107,6 +108,11 @@ def _view(r: NAVResult) -> dict:
         "net_surplus": f"{r.net_surplus:,}",
         "net_surplus_neg": r.net_surplus < 0,
         "surplus_ratio": f"{r.surplus_ratio:.2%}" if r.surplus_ratio is not None else "—",
+        "catalyst": (
+            "—" if r.catalyst_score is None
+            else f"{r.catalyst_score:.2f}" + (" ⚠trap" if r.catalyst_value_trap else "")
+        ),
+        "value_trap": r.catalyst_value_trap,
         "confidence": r.overall_confidence.value if r.overall_confidence else "—",
         "review_queue_count": r.review_queue_count,
         "evidence": [

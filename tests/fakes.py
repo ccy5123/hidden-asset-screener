@@ -105,3 +105,6 @@ class FakeDart:
 
     def get_separate_total_equity(self, corp_code, bsns_year, reprt_code):
         return self.separate_equity_by_corp.get(corp_code)
+
+    def get_disclosures(self, corp_code, bgn_de, end_de):
+        return list(getattr(self, "disclosures", []) or [])

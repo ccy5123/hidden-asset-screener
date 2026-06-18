@@ -115,6 +115,13 @@ def test_no_data_status_returns_empty():
     assert _dart(session).get_other_corp_investments("x", "2024") == []
 
 
+def test_get_disclosures_returns_list():  # SPEC-CATALYST-001
+    payload = {"status": "000", "list": [{"report_nm": "주식소각결정", "rcept_dt": "20250724"}]}
+    dart = _dart(FakeSession([FakeResponse(json_data=payload)]))
+    disc = dart.get_disclosures("00126380", "20240101", "20251231")
+    assert disc[0]["report_nm"] == "주식소각결정"
+
+
 def test_separate_total_equity_uses_ofs_bs():  # SPEC-NAV-001 rev.3 AC-4
     payload = {
         "status": "000",

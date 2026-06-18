@@ -42,6 +42,8 @@ def _row(rank: int, r: NAVResult) -> dict:
         "net_surplus": r.net_surplus,
         "surplus_ratio": r.surplus_ratio if r.surplus_ratio is not None else "",
         "confidence": r.overall_confidence.value if r.overall_confidence else "",
+        "catalyst_score": r.catalyst_score if r.catalyst_score is not None else "",
+        "value_trap": "Y" if r.catalyst_value_trap else "",
         "review_queue_count": r.review_queue_count,
         "evidence_sources": "; ".join(sources),
         "as_of": r.as_of_date.isoformat() if r.as_of_date else "",
