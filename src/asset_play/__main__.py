@@ -13,16 +13,27 @@ from .domain.enums import Market
 
 
 def _load_dotenv(path: str = ".env") -> None:
-    """Minimal .env loader (no python-dotenv dependency). Does not override real env."""
+    """Minimal .env loader (no python-dotenv dependency). Does not override real env.
+
+    Tolerant of an optional ``export`` prefix and surrounding single/double quotes, so
+    ``KEY=abc``, ``KEY="abc"`` and ``export KEY='abc'`` all yield the same value.
+    """
     p = Path(path)
     if not p.exists():
         return
-    for line in p.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
+    for raw in p.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
         key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]  # strip matching surrounding quotes
+        if key:
+            os.environ.setdefault(key, value)
 
 
 def _split(value: Optional[str]) -> list[str]:
