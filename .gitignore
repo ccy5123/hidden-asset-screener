@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Local cache & artifacts (SPEC-CORE: local cache, reports)
+.cache/
+cache/
+*.sqlite
+*.sqlite3
+*.parquet
+out/
+reports/
+*.html
+!src/asset_play/report/templates/*.html
+
+# Secrets — DART / data.go.kr / V-World keys
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
