@@ -59,9 +59,15 @@ class MolitClient(HttpSource):
     source_name = "MOLIT:개별공시지가"
 
     def _key(self) -> str:
-        if not self.config.data_go_kr_key:
-            raise ConfigError("data.go.kr key missing (set ASSET_PLAY_DATA_GO_KR_KEY)")
-        return self.config.data_go_kr_key
+        # 개별공시지가 속성 API is hosted on V-World NED, so a V-World key works (and is
+        # preferred). data.go.kr "개별공시지가" is a LINK API that redirects to V-World.
+        key = self.config.vworld_key or self.config.data_go_kr_key
+        if not key:
+            raise ConfigError(
+                "land-price API key missing (set ASSET_PLAY_VWORLD_KEY, "
+                "or ASSET_PLAY_DATA_GO_KR_KEY)"
+            )
+        return key
 
     def as_of(self, year: Optional[int] = None) -> date:
         return date(year or date.today().year, 1, 1)
