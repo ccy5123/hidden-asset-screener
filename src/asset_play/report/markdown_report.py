@@ -18,6 +18,7 @@ from typing import Optional, Union
 
 from ..domain.enums import AssetClass, ConfidenceGrade, MeasurementModel
 from ..domain.models import LandAsset
+from ..valuation.screen import ScreenMetrics, compute_screen_metrics
 
 _CONF = {"high": "🟢", "med": "🟡", "low": "🔴"}
 
@@ -63,6 +64,7 @@ class CompanyReport:
     market_cap: Optional[Decimal]
     reported_book_equity: Optional[Decimal]  # 별도(OFS) 자본총계
     sections: list = field(default_factory=list)  # list[ReportSection]
+    screen: Optional[ScreenMetrics] = None  # 1차 스크린 지표 (PBR·자기자본비율·PER·창업연도)
     catalyst_score: Optional[Decimal] = None
     value_trap: bool = False
     source: str = ""
@@ -104,6 +106,27 @@ def _pct(x: Optional[Decimal]) -> str:
     return "—" if x is None else f"{float(x) * 100:.1f}%"
 
 
+def _num(x: Optional[Decimal], dec: int = 2) -> str:
+    return "—" if x is None else f"{float(x):.{dec}f}"
+
+
+def _mark(ok: Optional[bool]) -> str:
+    return {True: "✅", False: "✗", None: "—"}[ok]
+
+
+def _screen_rows(m: ScreenMetrics) -> list:
+    """1차 스크린 지표 표 (책 기본값 PBR≤0.5·자기자본≥60%·PER≤12 대비 통과표시)."""
+    pbr_ok = None if m.pbr is None else m.pbr <= Decimal("0.5")
+    er_ok = None if m.equity_ratio is None else m.equity_ratio >= Decimal("0.6")
+    per_ok = None if m.per is None else m.per <= Decimal("12")
+    return [
+        f"| PBR (시총/지배주주지분) | {_num(m.pbr)} | ≤ 0.5 | {_mark(pbr_ok)} |",
+        f"| 자기자본비율 (연결) | {_pct(m.equity_ratio)} | ≥ 60% | {_mark(er_ok)} |",
+        f"| PER (시총/순이익) | {_num(m.per)} | ≤ 12 | {_mark(per_ok)} |",
+        f"| 창업연도 | {m.founded_year if m.founded_year else '—'} | 오래될수록↑ | — |",
+    ]
+
+
 def render_markdown(report: CompanyReport) -> str:
     o: list = []
     o.append(f"# 자산가치 점검 — {report.name} ({report.stock_code})\n")
@@ -116,8 +139,18 @@ def render_markdown(report: CompanyReport) -> str:
         o.append("> " + " · ".join(meta))
     o.append("> ⚠️ 각 자산은 **[보수=장부 ~ 추정시가] range**. 신뢰도 🟢 관측/공시 · 🟡 추정 · 🔴 신뢰↓.\n")
 
+    n = 1
+    if report.screen is not None:
+        o.append(f"## {n}. 1차 스크린 지표\n")
+        o.append("> 책 1단계 진입 필터 (연결 기준). PBR·자기자본비율이 필수, PER·창업연도는 보조.\n")
+        o.append("| 지표 | 값 | 책 기준 | 통과 |")
+        o.append("|---|---|---|---|")
+        o.extend(_screen_rows(report.screen))
+        o.append("")
+        n += 1
+
     scen = scenario_navs(report)
-    o.append("## 1. 종합 — 케이스별 range\n")
+    o.append(f"## {n}. 종합 NAV — 케이스별 range\n")
     o.append(f"- 시총 **{_eok(report.market_cap)}** · 별도(OFS) 자본총계 **{_eok(report.reported_book_equity)}**")
     if scen:
         nds = [nd for *_, nd in scen if nd is not None]
@@ -130,8 +163,8 @@ def render_markdown(report: CompanyReport) -> str:
         o.append("")
     else:
         o.append("- (별도 자본총계 없음 → revalued_nav/nav_discount 산출 불가)\n")
+    n += 1
 
-    n = 2
     for s in report.sections:
         o.append(f"## {n}. {s.title}\n")
         if s.intro:
@@ -320,10 +353,22 @@ def build_company_report(pipe, stock_code: str, *, bsns_year=None,
         cc, stock_code, bsns_year=bsns_year,
         land_assets=(land_assets or None), compute_catalyst=compute_catalyst,
     )
+    # 1차 스크린 지표 (연결 CFS) — 보고서 상단 진입필터 표시 (책 1단계)
+    screen = None
+    try:
+        company = pipe.dart.get_company(cc)
+        eq_ctrl, eq_total, assets, ni = pipe.dart.get_screen_financials(cc, bsns_year)
+        screen = compute_screen_metrics(
+            name=nav.name, stock_code=nav.stock_code or stock_code, market_cap=nav.market_cap,
+            equity_controlling=eq_ctrl, equity_total=eq_total, assets_total=assets, net_income=ni,
+            founded_year=(company.establishment_year if company else None),
+        )
+    except Exception:
+        screen = None
     return CompanyReport(
         name=nav.name, stock_code=nav.stock_code or stock_code,
         market_cap=nav.market_cap, reported_book_equity=nav.reported_book_equity,
-        sections=sections_from_valuations(valuations, review_queue),
+        sections=sections_from_valuations(valuations, review_queue), screen=screen,
         catalyst_score=nav.catalyst_score, value_trap=nav.catalyst_value_trap,
         source=f"DART 사업보고서({bsns_year}) · 자동집계",
         asof=nav.as_of_date,

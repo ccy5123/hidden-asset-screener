@@ -19,6 +19,7 @@ from asset_play.report.markdown_report import (
     scenario_navs,
     sections_from_valuations,
 )
+from asset_play.valuation.screen import compute_screen_metrics
 
 
 def _snap():
@@ -59,6 +60,43 @@ def test_render_markdown_has_sections_and_flags():
     assert md.startswith("# ")
     for token in ["nav_discount", "상장지분", "투자부동산", "🟢", "catalyst", "각주"]:
         assert token in md
+
+
+def test_screen_section_renders_metrics_and_pass_marks():
+    # 경방 근사치: PBR 0.29(≤0.5 ✅), 자기자본 65%(≥60% ✅), PER 4.93(≤12 ✅), 1919
+    m = compute_screen_metrics(
+        name="경방", stock_code="000050",
+        market_cap=Decimal("231660000000"),
+        equity_controlling=Decimal("800000000000"),
+        equity_total=Decimal("829120000000"),
+        assets_total=Decimal("1275000000000"),
+        net_income=Decimal("47000000000"),
+        founded_year=1919,
+    )
+    rep = CompanyReport(name="경방", stock_code="000050", market_cap=Decimal("231660000000"),
+                        reported_book_equity=Decimal("829120000000"), sections=[], screen=m)
+    md = render_markdown(rep)
+    assert "1차 스크린 지표" in md
+    for token in ["PBR", "자기자본비율", "PER", "창업연도", "1919", "0.29", "65.0%", "✅"]:
+        assert token in md, token
+
+
+def test_screen_section_omitted_when_absent():
+    assert "1차 스크린 지표" not in render_markdown(_report())  # screen=None
+
+
+def test_screen_section_marks_fail_and_none():
+    # 자본잠식(지배지분 음수→PBR None)·적자(순이익 음수→PER None)·자기자본비율 미달
+    m = compute_screen_metrics(
+        name="X", stock_code="000001", market_cap=Decimal("100"),
+        equity_controlling=Decimal("-10"), equity_total=Decimal("40"),
+        assets_total=Decimal("100"), net_income=Decimal("-5"), founded_year=2010,
+    )
+    md = render_markdown(CompanyReport(name="X", stock_code="000001", market_cap=Decimal("100"),
+                                       reported_book_equity=Decimal("40"), sections=[], screen=m))
+    assert "1차 스크린 지표" in md
+    assert "✗" in md  # 자기자본비율 40% < 60% → fail
+    assert "—" in md  # PBR/PER None → 데이터 없음
 
 
 # --------------------------------------------------------------------------- #
