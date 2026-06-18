@@ -134,7 +134,7 @@ class Pipeline:
         land_assets: Optional[list[LandAsset]] = None,
         as_of: Optional[date] = None,
         compute_catalyst: bool = False,
-    ) -> tuple[NAVResult, list, list]:
+    ) -> tuple[NAVResult, list, list, list]:
         as_of = as_of or self.price_provider.as_of()
         company = self._company_for(corp_code, stock_code, as_of)
 
@@ -229,7 +229,10 @@ class Pipeline:
                 nav.warnings.append("value trap 경계: 인식형 자산 + 무카탈리스트")
 
         unresolved = [(h.investee_name, h.book_value, company.name) for h in equity.tier3_queue]
-        return nav, review_queue, unresolved
+        # valuations: per-item EquityValuation/UnlistedValuation/PreciseLandValuation/SimpleValuation
+        # (investment property). Retained so the per-company report can render종목별/필지별 range
+        # detail — aggregate_nav only keeps class-level rollups in nav.by_class.
+        return nav, valuations, review_queue, unresolved
 
     def run(
         self,
@@ -248,7 +251,7 @@ class Pipeline:
 
         for corp_code, sc in self._resolve_targets(stock_codes, corp_codes):
             try:
-                nav, review, unresolved = self.value_company(
+                nav, _valuations, review, unresolved = self.value_company(
                     corp_code,
                     sc,
                     bsns_year=bsns_year,

@@ -9,23 +9,22 @@ build_company_report 가 파이프라인 결과(NAVResult)로 데이터를 조�
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Optional, Union
 
-from ..domain.enums import AssetClass
+from ..domain.enums import AssetClass, ConfidenceGrade
 
 _CONF = {"high": "🟢", "med": "🟡", "low": "🔴"}
 
-# 자산군 → (라벨, 신뢰도, 주석)
-_CLASS_META = {
-    AssetClass.EQUITY: ("상장 보유지분", "high", None),
-    AssetClass.UNLISTED_EQUITY: ("비상장 지분", "med", "순자산×지분율 근사 — 시장가 아님."),
-    AssetClass.INVESTMENT_PROPERTY: ("투자부동산(공정가치 주석)", "high", "회사 공시 공정가치 — 영업용 토지보다 신뢰 높음."),
-    AssetClass.LAND: ("토지(공시지가 추정)", "low", "공시지가×필지전체면적 — 면적·소유분 불명으로 상한 신뢰↓."),
-    AssetClass.OTHER: ("기타", "med", None),
+# ConfidenceGrade(高/中/低) → 표시 신뢰도
+_GRADE_CONF = {
+    ConfidenceGrade.HIGH: "high",
+    ConfidenceGrade.MEDIUM: "med",
+    ConfidenceGrade.LOW: "low",
 }
 
 
@@ -143,9 +142,18 @@ def render_markdown(report: CompanyReport) -> str:
             grg = _eok(ln.gain_low) if ln.gain_low == ln.gain_high else f"{_eok(ln.gain_low)} ~ {_eok(ln.gain_high)}"
             o.append(f"| {ln.label} | {_eok(ln.book)} | {rng} | {grg} | {_CONF.get(ln.confidence, '🟡')} |")
         o.append("")
+        # 주석: 동일 문구는 한 번만(비상장 다수 항목 중복 방지). 한 항목에만 붙는 고유 주석은 라벨과 함께.
+        counts = Counter(ln.note for ln in s.lines if ln.note)
+        shown: set = set()
         for ln in s.lines:
-            if ln.note:
-                o.append(f"- {_CONF.get(ln.confidence, '🟡')} **{ln.label}**: {ln.note}")
+            if not ln.note or ln.note in shown:
+                continue
+            shown.add(ln.note)
+            conf = _CONF.get(ln.confidence, "🟡")
+            if counts[ln.note] > 1:
+                o.append(f"- {conf} {ln.note}")  # 공통 주석 (여러 항목 공유)
+            else:
+                o.append(f"- {conf} **{ln.label}**: {ln.note}")  # 고유 주석
         o.append("")
         n += 1
 
@@ -169,35 +177,142 @@ def write_markdown(report: CompanyReport, path: Union[str, Path]) -> Path:
     return path
 
 
+# --------------------------------------------------------------------------- #
+# Per-item AssetLine builders — 종목별/필지별 detail (NAVResult.by_class only has rollups)
+# --------------------------------------------------------------------------- #
+def _grade(v) -> str:
+    return _GRADE_CONF.get(getattr(v, "confidence", None), "med")
+
+
+def _equity_line(v) -> AssetLine:
+    """상장 보유지분: 2시점 [장부 계상액 → 현재 시가]. 시가는 단일가(점)."""
+    return AssetLine(
+        label=getattr(v, "investee_name", None) or v.asset_id,
+        book=v.book_value, est_low=v.market_value, est_high=v.market_value,
+        confidence=_grade(v) or "high",
+    )
+
+
+def _unlisted_line(v) -> AssetLine:
+    note = "순자산×지분율 근사 — 시장가 아님"
+    if getattr(v, "unvalued", False):
+        note += " (미평가: 장부=시가)"
+    return AssetLine(
+        label=getattr(v, "investee_name", None) or v.asset_id,
+        book=v.book_value, est_low=v.market_value, est_high=v.market_value,
+        confidence="med", note=note,
+    )
+
+
+def _ip_line(v) -> AssetLine:
+    return AssetLine(
+        label="투자부동산(공정가치 주석)", book=v.book_value,
+        est_low=v.market_value, est_high=v.market_value, confidence="high",
+        note="회사 공시 공정가치 — 영업용 토지보다 신뢰 높음.",
+    )
+
+
+def _land_line(v) -> AssetLine:
+    """영업용/투자 토지 필지: range [공시지가×면적 ~ 시가보정]. S0 보수는 취득원가(book)."""
+    price = getattr(v, "official_price_per_sqm", None)
+    area = getattr(v, "area_sqm", None)
+    mv = v.market_value
+    base = (area * price).quantize(Decimal(1)) if price and area else mv  # 공시지가×면적 (보정 ×1.0)
+    est_low, est_high = (base, mv) if base <= mv else (mv, base)
+    loc = getattr(v, "location_text", None) or getattr(v, "pnu", None) or v.asset_id
+    bits = []
+    if area and price:
+        c = getattr(v, "correction_factor", Decimal(1))
+        bits.append(f"{float(area):,.0f}㎡ × {float(price):,.0f}원/㎡ · 보정 ×{c}")
+    if getattr(v, "pnu", None):
+        bits.append(f"PNU {v.pnu}")
+    return AssetLine(label=loc, book=v.book_value, est_low=est_low, est_high=est_high,
+                     confidence=_grade(v), note=" · ".join(bits) or None)
+
+
+def _review_line(r) -> AssetLine:
+    """검토대기 필지(매칭 저신뢰): 무효 처리하지 않고 🔴로 표시 — 추정값이 있으면 range 상한에만 가산."""
+    book = r.book_value
+    est = None
+    raw = getattr(r, "raw", None) or {}
+    if raw.get("estimated_market_value"):
+        try:
+            est = Decimal(raw["estimated_market_value"])
+        except (ValueError, ArithmeticError):
+            est = None
+    return AssetLine(
+        label=(getattr(r, "location_text", None) or "필지(소재지 불명)"),
+        book=book, est_low=book, est_high=(est if est is not None else book),
+        confidence="low", note=f"검토대기: {r.reason}",
+    )
+
+
+def sections_from_valuations(valuations, review_queue=None) -> list:
+    """per-item 평가 + 검토대기 → 보고서 섹션(상장지분 종목별 / 비상장 / 투자부동산·토지 필지별).
+
+    순수 함수(입력만 의존) — 평가 모델 리스트만 받아 ReportSection 리스트를 만든다.
+    """
+    eq, unl, land = [], [], []
+    for v in valuations or []:
+        ac = getattr(v, "asset_class", None)
+        if ac == AssetClass.EQUITY:
+            eq.append(_equity_line(v))
+        elif ac == AssetClass.UNLISTED_EQUITY:
+            unl.append(_unlisted_line(v))
+        elif ac == AssetClass.INVESTMENT_PROPERTY:
+            land.append(_ip_line(v))
+        elif ac == AssetClass.LAND:
+            land.append(_land_line(v))
+        else:
+            unl.append(AssetLine(label=str(ac), book=v.book_value,
+                                 est_low=v.market_value, est_high=v.market_value, confidence="med"))
+    for r in review_queue or []:
+        land.append(_review_line(r))  # 🔴 포함 (제외 금지)
+
+    eq.sort(key=lambda ln: ln.gain_high, reverse=True)
+    unl.sort(key=lambda ln: ln.book, reverse=True)  # 비상장은 차익 0 → 장부 큰 순
+    land.sort(key=lambda ln: ln.gain_high, reverse=True)
+
+    out = []
+    if eq:
+        out.append(ReportSection("상장 보유지분 (종목별)", eq,
+                                  intro="보수=장부 계상액, 시가=현재 KRX 종가. 차익=시가−장부."))
+    if unl:
+        out.append(ReportSection("비상장 지분 (근사)", unl,
+                                  intro="순자산×지분율 근사 — 시장가 아님."))
+    if land:
+        out.append(ReportSection(
+            "투자부동산·토지 (필지별)", land,
+            intro="보수=취득원가(장부) ~ 공시지가×면적 ~ 시가보정. 🔴=검토대기(매칭 저신뢰), range 상한에만 반영."))
+    return out
+
+
 def build_company_report(pipe, stock_code: str, *, bsns_year=None,
                          compute_catalyst: bool = False, land_assets_by_corp=None):
-    """파이프라인(NAVResult)으로 CompanyReport 조립. 자산군별 [장부 ~ 시가] 라인 + 신뢰도."""
-    run = pipe.run(
-        stock_codes=[stock_code], bsns_year=bsns_year,
-        land_assets_by_corp=land_assets_by_corp, compute_catalyst=compute_catalyst,
-    )
-    if not run.results:
+    """파이프라인 per-item 평가로 CompanyReport 조립 — 종목별·필지별 [장부 ~ 시가] range + 신뢰도."""
+    bsns_year = bsns_year or str(date.today().year - 1)
+    try:
+        cc = pipe.dart.corp_code_for_stock(stock_code)
+    except Exception:
+        cc = None
+    if not cc:
         return None
-    nav = run.results[0]
-    lines = []
-    for ac, agg in nav.by_class.items():
-        label, conf, note = _CLASS_META.get(ac, (str(ac), "med", None))
-        lines.append(AssetLine(label=label, book=agg.book_value,
-                               est_low=agg.market_value, est_high=agg.market_value,
-                               confidence=conf, note=note))
-    sections = (
-        [ReportSection("자산군별 미실현이익", lines, intro="자산군 집계. 보수=장부, 시가=추정/관측시가.")]
-        if lines else []
+    land_assets = (land_assets_by_corp or {}).get(cc)
+    nav, valuations, review_queue, _unresolved = pipe.value_company(
+        cc, stock_code, bsns_year=bsns_year,
+        land_assets=land_assets, compute_catalyst=compute_catalyst,
     )
     return CompanyReport(
         name=nav.name, stock_code=nav.stock_code or stock_code,
         market_cap=nav.market_cap, reported_book_equity=nav.reported_book_equity,
-        sections=sections, catalyst_score=nav.catalyst_score, value_trap=nav.catalyst_value_trap,
-        source=f"DART 사업보고서({bsns_year or '직전연도'}) · 자동집계",
+        sections=sections_from_valuations(valuations, review_queue),
+        catalyst_score=nav.catalyst_score, value_trap=nav.catalyst_value_trap,
+        source=f"DART 사업보고서({bsns_year}) · 자동집계",
         asof=nav.as_of_date,
         footnotes=[
             "장부·자본총계 = 별도(OFS) 기준. 시세 = 현재 KRX 종가.",
-            "영업용 토지(설비현황) 외부추정은 신뢰↓ — 정밀값은 사람 검토 전제(--land-file).",
+            "상장지분 range: S0 보수=장부 계상액(취득시점), S1·S2=현재 시가 (2시점).",
+            "토지 range: S0=취득원가(장부), S1=공시지가×면적, S2=시가보정. 🔴 검토대기 필지는 S2 상한에만 가산(불확실).",
             "비상장은 순자산×지분율 근사, 시장가 아님.",
         ],
     )
