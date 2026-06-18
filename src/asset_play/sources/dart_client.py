@@ -27,6 +27,11 @@ from ..domain.models import Company, EquityHolding
 from ..domain.units import MoneyUnit, to_decimal, to_won
 from ..exceptions import ConfigError, QuotaExceededError, SourceError
 from .base import HttpSource, QuotaTracker
+from .dart_document import (
+    InvestmentPropertyFairValue,
+    parse_ip_fair_value_cells,
+    unit_multiplier_by_reconcile,
+)
 
 BASE_URL = "https://opendart.fss.or.kr/api"
 
@@ -167,6 +172,29 @@ def extract_account_amount(
         if nm in targets:
             return to_won(r.get(field), unit)
     return None
+
+
+def _ipfv_to_cache(r: InvestmentPropertyFairValue) -> dict:
+    def s(v):
+        return None if v is None else str(v)
+
+    return {
+        "land_book": s(r.land_book), "land_fair": s(r.land_fair),
+        "building_book": s(r.building_book), "building_fair": s(r.building_fair),
+        "unit_multiplier": r.unit_multiplier, "reconciled": r.reconciled, "basis": r.basis,
+    }
+
+
+def _ipfv_from_cache(d: dict) -> InvestmentPropertyFairValue:
+    def dec(v):
+        return None if v is None else Decimal(v)
+
+    return InvestmentPropertyFairValue(
+        land_book=Decimal(d["land_book"]), land_fair=Decimal(d["land_fair"]),
+        building_book=dec(d.get("building_book")), building_fair=dec(d.get("building_fair")),
+        unit_multiplier=int(d["unit_multiplier"]), reconciled=bool(d["reconciled"]),
+        basis=d.get("basis", "OFS"),
+    )
 
 
 class DartClient(HttpSource):
@@ -416,6 +444,90 @@ class DartClient(HttpSource):
         if not self._check_status(data):
             return []
         return data.get("list", [])
+
+    def _latest_annual_rcept(self, corp_code: str, bsns_year: str) -> Optional[str]:
+        """사업연도 ``bsns_year``의 사업보고서 rcept_no (정정 시 최신). FY는 익년 Q1에 제출."""
+        y = int(bsns_year)
+        disc = self.get_disclosures(corp_code, f"{y + 1}0101", f"{y + 1}1231")
+        annual = [d for d in disc if "사업보고서" in (d.get("report_nm") or "")]
+        # FY 정확 표기 "(YYYY.12)" 우선 (반기/분기 정정과 혼동 방지)
+        exact = [d for d in annual if f"({bsns_year}.12)" in (d.get("report_nm") or "")]
+        cands = exact or annual
+        if not cands:
+            return None
+        cands.sort(key=lambda d: d.get("rcept_dt") or "", reverse=True)  # 최신 정정 우선
+        return cands[0].get("rcept_no")
+
+    def get_document_xml(self, rcept_no: str) -> Optional[str]:
+        """사업보고서 본문 document.xml (ZIP → 최대 멤버 XML, 디코딩). 실패 시 None."""
+        raw = self.get_bytes(
+            f"{BASE_URL}/document.xml",
+            params={"crtfc_key": self._key(), "rcept_no": rcept_no},
+        )
+        if not raw:
+            return None
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(raw))
+        except zipfile.BadZipFile:
+            return None
+        names = zf.namelist()
+        if not names:
+            return None
+        data = zf.read(max(names, key=lambda n: zf.getinfo(n).file_size))
+        for enc in ("utf-8", "cp949", "euc-kr"):
+            try:
+                return data.decode(enc)
+            except UnicodeDecodeError:
+                continue
+        return data.decode("utf-8", errors="replace")
+
+    def get_investment_property_fair_value(
+        self, corp_code: str, bsns_year: str, reprt_code: str = REPORT_ANNUAL
+    ) -> Optional[InvestmentPropertyFairValue]:
+        """별도(OFS) 투자부동산 토지/건물 장부·공정가치 (원). 단위는 BS 대사로 자동검출.
+
+        공정가치 주석이 없거나(None) 단위 대사 실패 시 ``reconciled=False`` — 자동주입 금지
+        (SPEC-IPNOTE-001 AC-2/5). document.xml은 크므로 파싱 결과를 캐시한다.
+        """
+        ck = f"{corp_code}:{bsns_year}:{reprt_code}"
+        if self.cache is not None:
+            cached = self.cache.get_json("dart:ipfv", ck)
+            if cached is not None:
+                return None if cached.get("none") else _ipfv_from_cache(cached)
+
+        result = self._compute_ipfv(corp_code, bsns_year, reprt_code)
+        if self.cache is not None:
+            self.cache.set_json(
+                "dart:ipfv", ck,
+                {"none": True} if result is None else _ipfv_to_cache(result),
+            )
+        return result
+
+    def _compute_ipfv(
+        self, corp_code: str, bsns_year: str, reprt_code: str
+    ) -> Optional[InvestmentPropertyFairValue]:
+        rcept = self._latest_annual_rcept(corp_code, bsns_year)
+        if not rcept:
+            return None
+        text = self.get_document_xml(rcept)
+        if not text:
+            return None
+        parsed = parse_ip_fair_value_cells(text)
+        if parsed["land_fair"] is None:  # 공정가치 주석 부재 → 정상적으로 None
+            return None
+        rows = self.get_financial_statements(corp_code, bsns_year, reprt_code, fs_div="OFS")
+        bs_ip = extract_account_amount(rows, ["투자부동산"], sj_div="BS") if rows else None
+        u = unit_multiplier_by_reconcile(parsed["land_book"], parsed["building_book"], bs_ip)
+        mult = u or 1000  # 표시용 기본(천원); reconciled=False면 자동주입 금지
+        scale = Decimal(mult)
+        return InvestmentPropertyFairValue(
+            land_book=(parsed["land_book"] or Decimal(0)) * scale,
+            land_fair=parsed["land_fair"] * scale,
+            building_book=(parsed["building_book"] * scale) if parsed["building_book"] else None,
+            building_fair=(parsed["building_fair"] * scale) if parsed["building_fair"] else None,
+            unit_multiplier=mult,
+            reconciled=u is not None,
+        )
 
     def get_net_assets(
         self, corp_code: str, bsns_year: str, reprt_code: str = REPORT_ANNUAL

@@ -16,7 +16,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Optional, Union
 
-from ..domain.enums import AssetClass, ConfidenceGrade
+from ..domain.enums import AssetClass, ConfidenceGrade, MeasurementModel
+from ..domain.models import LandAsset
 
 _CONF = {"high": "🟢", "med": "🟡", "low": "🔴"}
 
@@ -288,8 +289,13 @@ def sections_from_valuations(valuations, review_queue=None) -> list:
 
 
 def build_company_report(pipe, stock_code: str, *, bsns_year=None,
-                         compute_catalyst: bool = False, land_assets_by_corp=None):
-    """파이프라인 per-item 평가로 CompanyReport 조립 — 종목별·필지별 [장부 ~ 시가] range + 신뢰도."""
+                         compute_catalyst: bool = False, land_assets_by_corp=None,
+                         auto_land: bool = False):
+    """파이프라인 per-item 평가로 CompanyReport 조립 — 종목별·필지별 [장부 ~ 시가] range + 신뢰도.
+
+    ``auto_land=True``: 별도 투자부동산 공정가치 주석(SPEC-IPNOTE-001)을 자동 추출해 토지를
+    주입(단위 BS 대사 성공분만 — reconciled=False는 자동주입 금지). 수작업 land-file과 병합.
+    """
     bsns_year = bsns_year or str(date.today().year - 1)
     try:
         cc = pipe.dart.corp_code_for_stock(stock_code)
@@ -297,10 +303,22 @@ def build_company_report(pipe, stock_code: str, *, bsns_year=None,
         cc = None
     if not cc:
         return None
-    land_assets = (land_assets_by_corp or {}).get(cc)
+    land_assets = list((land_assets_by_corp or {}).get(cc) or [])
+    if auto_land:
+        try:
+            ipfv = pipe.dart.get_investment_property_fair_value(cc, bsns_year)
+        except Exception:
+            ipfv = None
+        if ipfv and ipfv.reconciled and ipfv.land_fair and ipfv.land_fair > 0:
+            land_assets.append(LandAsset(
+                holder_corp_code=cc,
+                location_text="투자부동산 토지 (자동: 별도 공정가치 주석)",
+                book_value=ipfv.land_book, fair_value=ipfv.land_fair,
+                measurement_model=MeasurementModel.COST,
+            ))
     nav, valuations, review_queue, _unresolved = pipe.value_company(
         cc, stock_code, bsns_year=bsns_year,
-        land_assets=land_assets, compute_catalyst=compute_catalyst,
+        land_assets=(land_assets or None), compute_catalyst=compute_catalyst,
     )
     return CompanyReport(
         name=nav.name, stock_code=nav.stock_code or stock_code,

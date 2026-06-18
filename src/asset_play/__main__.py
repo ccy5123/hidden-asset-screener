@@ -166,6 +166,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
     report = build_company_report(
         pipe, args.stock, bsns_year=args.year,
         compute_catalyst=args.catalyst, land_assets_by_corp=land_by_corp or None,
+        auto_land=args.auto_land,
     )
     if report is None:
         print(f"no data for {args.stock}", file=sys.stderr)
@@ -242,6 +243,12 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--stock", required=True, help="종목코드 (예: 000050)")
     report.add_argument("--year", help="사업연도 (기본: 작년)")
     report.add_argument("--land-file", dest="land_file", help="토지 자산 파일 (.json/.csv)")
+    report.add_argument(
+        "--auto-land",
+        dest="auto_land",
+        action="store_true",
+        help="투자부동산 토지 자동추출 (별도 공정가치 주석, BS 단위대사) — 수작업 land-file 불필요",
+    )
     report.add_argument("--catalyst", action="store_true", help="카탈리스트 점수 포함")
     report.add_argument("--out", default="out", help="출력 디렉터리 (기본: out)")
     report.set_defaults(func=_cmd_report)
