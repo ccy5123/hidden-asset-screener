@@ -31,7 +31,9 @@ def test_molit_parse_price_picks_latest_year():
 
 
 def test_vworld_parse_pnu_ok_and_fail():
-    ok = {"response": {"status": "OK", "result": [{"id": "1234567890123456789"}]}}
+    # 실측: getcoord 응답의 19자리 PNU는 refined.structure.level4LC 에 있다 (result는 x/y 좌표).
+    ok = {"response": {"status": "OK",
+                       "refined": {"structure": {"level4LC": "1234567890123456789"}}}}
     assert VWorldClient._parse_pnu(ok) == "1234567890123456789"
     assert VWorldClient._parse_pnu({"response": {"status": "NOT_FOUND"}}) is None
     assert VWorldClient._parse_pnu({}) is None
