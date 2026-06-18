@@ -29,3 +29,34 @@ def test_correction_factor_region_override():
     assert cfg.correction_factor_for("서울특별시 중구") == Decimal("1.6")
     assert cfg.correction_factor_for("부산광역시") == Decimal("1.4")  # falls back to national
     assert cfg.correction_factor_for(None) == Decimal("1.4")
+
+
+def test_from_env_autoloads_dotenv(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text(
+        "# comment\nASSET_PLAY_VWORLD_KEY=vw-from-dotenv\nexport ASSET_PLAY_DART_API_KEY='dk'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ASSET_PLAY_VWORLD_KEY", raising=False)
+    monkeypatch.delenv("ASSET_PLAY_DART_API_KEY", raising=False)
+
+    cfg = Config.from_env()
+    assert cfg.vworld_key == "vw-from-dotenv"
+    assert cfg.dart_api_key == "dk"
+
+
+def test_real_env_overrides_dotenv(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("ASSET_PLAY_VWORLD_KEY=from-dotenv\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ASSET_PLAY_VWORLD_KEY", "from-real-env")
+
+    cfg = Config.from_env()
+    assert cfg.vworld_key == "from-real-env"  # real env wins on conflict
+
+
+def test_explicit_env_dict_skips_dotenv(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("ASSET_PLAY_VWORLD_KEY=from-dotenv\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    cfg = Config.from_env({})  # explicit dict -> .env must be ignored
+    assert cfg.vworld_key is None

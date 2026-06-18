@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import sys
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Optional
 
 from .config import Config
 from .domain.enums import Market
+from .exceptions import SourceError
 
 
 def _load_dotenv(path: str = ".env") -> None:
@@ -70,6 +72,32 @@ def _cmd_screen(args: argparse.Namespace) -> int:
         stock_codes = [r["stock_code"] for r in rows if r.get("stock_code")]
         print(f"[--all] screening {len(stock_codes)} listed names (DART quota heavy)…")
 
+    # Tier-2 land (human-in-loop): each resolved code is also added to the screen set,
+    # so `screen --land-file land.json` is self-sufficient.
+    land_by_corp: dict[str, list] = {}
+    if args.land_file:
+        from .land_file import load_land_assets
+
+        for code, assets in load_land_assets(args.land_file).items():
+            cc = code if len(code) == 8 else None
+            if cc is None:
+                try:
+                    cc = pipe.dart.corp_code_for_stock(code)
+                except SourceError:
+                    cc = None
+            if not cc:
+                print(
+                    f"  warn: land-file code {code} unresolved (run sync-corp-codes first)",
+                    file=sys.stderr,
+                )
+                continue
+            land_by_corp.setdefault(cc, []).extend(assets)
+            if len(code) == 8:
+                if code not in corp_codes:
+                    corp_codes.append(code)
+            elif code not in stock_codes:
+                stock_codes.append(code)
+
     if not stock_codes and not corp_codes:
         print(
             "nothing to screen: pass --stock 000270,003550 (or --corp ...) or --all",
@@ -82,6 +110,7 @@ def _cmd_screen(args: argparse.Namespace) -> int:
         stock_codes=stock_codes,
         corp_codes=corp_codes,
         bsns_year=args.year,
+        land_assets_by_corp=land_by_corp,
     )
     print(f"ranked {len(run.results)} companies")
     if run.quota_exhausted:
@@ -90,6 +119,26 @@ def _cmd_screen(args: argparse.Namespace) -> int:
         print(f"  warn: {w}", file=sys.stderr)
     print(f"CSV  → {csv_path}")
     print(f"HTML → {html_path}")
+
+    if run.unresolved:
+        print(
+            f"\n비상장 분류 {len(run.unresolved)}건 — 상장 매칭 실패 가능성 점검 (장부가순 상위):",
+            file=sys.stderr,
+        )
+        for name, book, holder in run.unresolved[:15]:
+            print(f"  - {name}  (장부 {int(book) / 1e8:,.0f}억, 보유: {holder})", file=sys.stderr)
+        upath = Path(args.out)
+        upath.mkdir(parents=True, exist_ok=True)
+        upath = upath / "unresolved_names.csv"
+        with upath.open("w", encoding="utf-8-sig", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["investee_name", "book_value_won", "holder"])
+            for name, book, holder in run.unresolved:
+                w.writerow([name, int(book), holder])
+        print(
+            f"  → {upath} (상장사인데 누락됐으면 data/name_aliases.json 에 추가)",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -107,6 +156,11 @@ def build_parser() -> argparse.ArgumentParser:
     screen.add_argument("--all", action="store_true", help="전체 상장 유니버스 (쿼터 주의)")
     screen.add_argument("--year", help="사업연도 (기본: 작년)")
     screen.add_argument("--universe", help="KOSPI|KOSDAQ|KONEX|ALL")
+    screen.add_argument(
+        "--land-file",
+        dest="land_file",
+        help="토지 자산 파일 (.json/.csv) — 검토된 투자부동산/토지 값 주입 (human-in-loop)",
+    )
     screen.add_argument("--out", default="out", help="출력 디렉터리 (기본: out)")
     screen.set_defaults(func=_cmd_screen)
     return parser

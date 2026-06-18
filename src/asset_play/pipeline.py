@@ -17,19 +17,18 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Optional, Union
 
-from .aggregate.nav import SimpleValuation, aggregate_nav, make_investment_property_item
+from .aggregate.nav import aggregate_nav, make_investment_property_item
 from .aggregate.rank import rank_by_net_surplus
 from .cache import CacheStore
 from .config import Config
-from .domain.enums import AssetClass
 from .domain.models import Company, LandAsset, NAVResult
 from .exceptions import QuotaExceededError, SourceError
 from .report.csv_report import write_csv
 from .report.html_report import write_html
 from .sources.dart_client import REPORT_ANNUAL, DartClient
 from .sources.krx import KrxClient, PriceProvider
-from .sources.molit import LandPriceProvider
-from .sources.vworld import Geocoder
+from .sources.molit import LandPriceProvider, MolitClient
+from .sources.vworld import Geocoder, VWorldClient
 from .valuation.equity import value_equity_holdings
 from .valuation.land_precise import value_land_precise
 from .valuation.land_screen import screen_land
@@ -42,6 +41,18 @@ class PipelineRun:
     review_queue: list = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     quota_exhausted: bool = False
+    # investee names that did NOT resolve to a listed stock code (name, book_value, holder),
+    # ranked by book value — review aid for extending the alias DB (data/name_aliases.json).
+    unresolved: list = field(default_factory=list)
+
+
+def _rank_unresolved(items: list) -> list:
+    """Dedupe unresolved (name, book, holder) by name (keep max book), sort by book desc."""
+    best: dict = {}
+    for name, book, holder in items:
+        if name not in best or book > best[name][1]:
+            best[name] = (name, book, holder)
+    return sorted(best.values(), key=lambda t: t[1], reverse=True)
 
 
 class Pipeline:
@@ -59,8 +70,15 @@ class Pipeline:
         self.cache = cache or CacheStore(str(self.config.cache_dir / "asset_play.sqlite"))
         self.dart = dart or DartClient(self.config, cache=self.cache)
         self.price_provider = price_provider or KrxClient(self.config, cache=self.cache)
-        self.geocoder = geocoder
-        self.land_price_provider = land_price_provider
+        # Auto-wire the land providers when a V-World key is configured — both the geocoder
+        # (주소→PNU) and the 개별공시지가 source authenticate with ASSET_PLAY_VWORLD_KEY.
+        # Explicit injection wins; with no key they stay None and the precise path is skipped.
+        self.geocoder = geocoder or (
+            VWorldClient(self.config, cache=self.cache) if self.config.vworld_key else None
+        )
+        self.land_price_provider = land_price_provider or (
+            MolitClient(self.config, cache=self.cache) if self.config.vworld_key else None
+        )
 
     def sync_corp_codes(self):
         return self.dart.sync_corp_codes()
@@ -142,9 +160,13 @@ class Pipeline:
                             snapshot=screen.snapshot,
                         )
                     )
-                if self.geocoder and self.land_price_provider and screen.shortlisted:
+                # Parcels supplied without a fair-value note are estimated from 공시지가.
+                # Explicit --land-file input IS the human shortlist, so we don't re-gate on
+                # screen.shortlisted (that gate is for mass auto-screening, not manual input).
+                precise_targets = [la for la in land_assets if la.fair_value is None]
+                if self.geocoder and self.land_price_provider and precise_targets:
                     precise = value_land_precise(
-                        [la for la in land_assets if la.fair_value is None],
+                        precise_targets,
                         self.geocoder,
                         self.land_price_provider,
                         config=self.config,
@@ -165,7 +187,8 @@ class Pipeline:
             as_of=as_of,
         )
         nav.warnings.extend(warnings)
-        return nav, review_queue
+        unresolved = [(h.investee_name, h.book_value, company.name) for h in equity.tier3_queue]
+        return nav, review_queue, unresolved
 
     def run(
         self,
@@ -183,7 +206,7 @@ class Pipeline:
 
         for corp_code, sc in self._resolve_targets(stock_codes, corp_codes):
             try:
-                nav, review = self.value_company(
+                nav, review, unresolved = self.value_company(
                     corp_code,
                     sc,
                     bsns_year=bsns_year,
@@ -200,8 +223,10 @@ class Pipeline:
                 continue
             run.results.append(nav)
             run.review_queue.extend(review)
+            run.unresolved.extend(unresolved)
 
         run.results = rank_by_net_surplus(run.results)
+        run.unresolved = _rank_unresolved(run.unresolved)
         return run
 
     def run_and_report(

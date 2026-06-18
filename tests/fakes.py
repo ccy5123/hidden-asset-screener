@@ -6,7 +6,6 @@ import io
 import zipfile
 from typing import Callable, Optional
 
-from asset_play.domain.enums import Market
 from asset_play.domain.models import Company, EquityHolding
 
 

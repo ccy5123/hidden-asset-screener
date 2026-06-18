@@ -16,6 +16,35 @@ from pydantic import BaseModel, ConfigDict, Field
 from .domain.enums import Market
 
 
+def _load_dotenv_values(start: Optional[Path] = None) -> dict[str, str]:
+    """Parse ``ASSET_PLAY_*`` style ``KEY=VALUE`` pairs from the nearest ``.env``.
+
+    Walks up from ``start`` (default: CWD) until a ``.env`` is found or the
+    filesystem root is reached. Returns an empty dict when none exists. Values
+    are NOT written to ``os.environ`` — the caller overlays them so that real
+    environment variables always win (standard dotenv precedence).
+    """
+    here = (start or Path.cwd()).resolve()
+    for directory in (here, *here.parents):
+        env_path = directory / ".env"
+        if env_path.is_file():
+            break
+    else:
+        return {}
+
+    values: dict[str, str] = {}
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.removeprefix("export ").strip()
+        val = val.strip().strip("'").strip('"')
+        if key:
+            values[key] = val
+    return values
+
+
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -23,6 +52,9 @@ class Config(BaseModel):
     dart_api_key: Optional[str] = None
     data_go_kr_key: Optional[str] = None
     vworld_key: Optional[str] = None
+
+    # Optional user name-alias DB merged over the packaged default (investee→stock matching).
+    name_aliases_path: Optional[Path] = None
 
     # --- Tunable assumptions (§8) ---
     # §8.1 corporate tax rate for after-tax net-surplus correction (single-rate model).
@@ -58,7 +90,13 @@ class Config(BaseModel):
 
     @classmethod
     def from_env(cls, env: Optional[dict[str, str]] = None) -> "Config":
-        e = env if env is not None else os.environ
+        # When reading the real environment, auto-load a .env file so keys placed
+        # there are picked up without an explicit `export`. Real env vars win on
+        # conflict. An explicit `env` dict (tests) skips .env loading entirely.
+        if env is None:
+            e: dict[str, str] = {**_load_dotenv_values(), **os.environ}
+        else:
+            e = env
 
         def _dec(name: str, default: Decimal) -> Decimal:
             raw = e.get(name)
@@ -74,6 +112,9 @@ class Config(BaseModel):
             dart_api_key=e.get("ASSET_PLAY_DART_API_KEY") or None,
             data_go_kr_key=e.get("ASSET_PLAY_DATA_GO_KR_KEY") or None,
             vworld_key=e.get("ASSET_PLAY_VWORLD_KEY") or None,
+            name_aliases_path=(
+                Path(e["ASSET_PLAY_NAME_ALIASES"]) if e.get("ASSET_PLAY_NAME_ALIASES") else None
+            ),
             corporate_tax_rate=_dec("ASSET_PLAY_CORPORATE_TAX_RATE", Decimal("0.22")),
             land_price_correction_factor=_dec(
                 "ASSET_PLAY_LAND_PRICE_CORRECTION_FACTOR", Decimal("1.4")

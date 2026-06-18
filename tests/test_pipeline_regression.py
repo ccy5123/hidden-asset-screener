@@ -83,3 +83,23 @@ def test_report_generation_smoke(tmp_path):
     run, csv_path, html_path = pipe.run_and_report(out_dir=tmp_path, stock_codes=["000001"])
     assert csv_path.exists() and html_path.exists()
     assert run.results[0].surplus_ratio == Decimal("0.366600")
+
+
+def test_unresolved_report_collected_and_ranked():
+    pipe = _build_pipeline()
+    run = pipe.run(stock_codes=["000001"])
+    # 비상장C did not resolve to a listed stock code → surfaces in the unresolved report
+    names = [name for name, *_ in run.unresolved]
+    assert "비상장C" in names
+    assert "상장자회사A" not in names  # resolved → not reported
+    books = [book for _, book, _ in run.unresolved]
+    assert books == sorted(books, reverse=True)  # ranked by book value desc
+
+
+def test_rank_unresolved_dedupes_by_name_keeping_max_book():
+    from asset_play.pipeline import _rank_unresolved
+
+    ranked = _rank_unresolved(
+        [("엘지전자", Decimal("100"), "A"), ("엘지전자", Decimal("300"), "B"), ("씨제이", Decimal("200"), "A")]
+    )
+    assert [(n, b) for n, b, _ in ranked] == [("엘지전자", Decimal("300")), ("씨제이", Decimal("200"))]

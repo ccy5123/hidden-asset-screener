@@ -86,6 +86,28 @@ def test_get_other_corp_investments_parses_separate_fs():
     assert h.fs_type == FSType.SEPARATE  # invariant #1
 
 
+def test_get_other_corp_investments_drops_summary_rows():
+    # 타법인출자현황 includes a 합계/소계 total row that must NOT be ingested as a holding.
+    payload = {
+        "status": "000",
+        "list": [
+            {
+                "inv_prm": "상장자회사",
+                "trmend_blce_qy": "1,000,000",
+                "trmend_blce_qota_rt": "30.0",
+                "trmend_blce_acntbk_amount": "10,000,000,000",
+                "frst_acqs_amount": "8,000,000,000",
+            },
+            {"inv_prm": "합 계", "trmend_blce_acntbk_amount": "10,000,000,000"},
+            {"inv_prm": "소계", "trmend_blce_acntbk_amount": "10,000,000,000"},
+        ],
+    }
+    holdings = _dart(FakeSession([FakeResponse(json_data=payload)])).get_other_corp_investments(
+        "x", "2024"
+    )
+    assert [h.investee_name for h in holdings] == ["상장자회사"]
+
+
 def test_no_data_status_returns_empty():
     session = FakeSession([FakeResponse(json_data={"status": "013", "message": "데이터없음"})])
     assert _dart(session).get_other_corp_investments("x", "2024") == []

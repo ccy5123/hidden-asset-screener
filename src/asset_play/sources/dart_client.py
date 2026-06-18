@@ -13,10 +13,12 @@ and every network path is injectable for tests.
 from __future__ import annotations
 
 import io
+import json
 import re
 import zipfile
 import xml.etree.ElementTree as ET
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Optional
 
 from ..config import Config
@@ -36,6 +38,78 @@ REPORT_Q3 = "11014"  # 3분기보고서
 
 # DART status codes that mean "stop / config problem".
 _KEY_ERRORS = {"010", "011", "012", "901"}
+
+# 타법인출자현황 emits a 합계/소계 total row alongside real holdings; it must be dropped
+# or it pollutes book-value aggregates and item counts.
+_SUMMARY_ROW_NAMES = {"합계", "소계", "계", "총계"}
+
+
+def _is_summary_row(name: Optional[str]) -> bool:
+    return re.sub(r"\s+", "", name or "") in _SUMMARY_ROW_NAMES
+
+
+# Name-matching alias DB lives in data, not code (see data/name_aliases.json). 타법인출자현황
+# gives investee names only (no code), and the corpCode master writes conglomerates in Latin
+# (LG전자) while reports spell them in Hangul (엘지전자) — so we transliterate a leading Hangul
+# short form to its Latin master form. The map is editable data; users extend it without code
+# changes (and via a merged user file pointed at by ASSET_PLAY_NAME_ALIASES).
+_ALIASES_PATH = Path(__file__).resolve().parent.parent / "data" / "name_aliases.json"
+
+
+def _read_aliases(path) -> tuple[dict[str, str], dict[str, str]]:
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}, {}
+    trans = {str(k): str(v) for k, v in (raw.get("transliterations") or {}).items()}
+    names = {str(k): str(v) for k, v in (raw.get("names") or {}).items()}
+    return trans, names
+
+
+def load_name_aliases(extra_path=None) -> tuple[dict[str, str], dict[str, str]]:
+    """Return ``(transliterations, names)`` = packaged defaults merged with an optional
+    user file (user entries win). ``transliterations``: leading Hangul short form → Latin.
+    ``names``: full investee name → stock_code override."""
+    trans, names = _read_aliases(_ALIASES_PATH)
+    if extra_path:
+        u_trans, u_names = _read_aliases(extra_path)
+        trans = {**trans, **u_trans}
+        names = {**names, **u_names}
+    return trans, names
+
+
+_DEFAULT_TRANSLIT, _DEFAULT_NAMES = load_name_aliases()
+_DEFAULT_TRANSLIT_KEYS = sorted(_DEFAULT_TRANSLIT, key=len, reverse=True)
+
+_PAREN_RE = re.compile(r"\([^()]*\)|（[^（）]*）")  # footnotes / (주) / (*1)
+_FOOTNOTE_RE = re.compile(r"\*\s*\d+\s*\)?")  # bare star-footnotes: *1) *5 (no opening paren)
+_CORP_FORM_RE = re.compile(r"주식회사|㈜|유한회사|유한책임회사|합자회사|합명회사")
+_NONNAME_RE = re.compile(r"[\s.,'\"&\-_/()*·ㆍ・]+")
+
+
+def normalize_corp_name(name: Optional[str], translit: Optional[dict[str, str]] = None) -> str:
+    """Canonicalize a Korean corporate name for cross-source matching.
+
+    Drops parenthetical footnotes/affixes ((*2), (주)), bare star-footnotes (*1)), corporate-
+    form tokens (주식회사/㈜/유한회사), strips whitespace+punctuation, upper-cases, then
+    transliterates a leading Hangul conglomerate short form to its Latin master form using
+    ``translit`` (defaults to the packaged alias DB). Returns "" for empty input.
+    """
+    if not name:
+        return ""
+    s = _PAREN_RE.sub("", str(name))
+    s = _FOOTNOTE_RE.sub("", s)
+    s = _CORP_FORM_RE.sub("", s)
+    s = _NONNAME_RE.sub("", s)
+    s = s.upper()
+    if translit is None:
+        table, keys = _DEFAULT_TRANSLIT, _DEFAULT_TRANSLIT_KEYS
+    else:
+        table, keys = translit, sorted(translit, key=len, reverse=True)
+    for hangul in keys:
+        if s.startswith(hangul):
+            return table[hangul] + s[len(hangul):]
+    return s
 
 
 def classify_land_measurement_model(text: Optional[str]) -> MeasurementModel:
@@ -99,6 +173,16 @@ class DartClient(HttpSource):
         self._stock_to_corp: Optional[dict[str, str]] = None
         self._name_to_stock: Optional[dict[str, str]] = None
         self._name_to_corp: Optional[dict[str, str]] = None
+        # normalized-name indexes (fallback when exact name match fails)
+        self._name_to_stock_norm: Optional[dict[str, str]] = None
+        self._name_to_corp_norm: Optional[dict[str, str]] = None
+        # name-matching alias DB (data-driven; user file merged via config.name_aliases_path)
+        trans, names = load_name_aliases(getattr(config, "name_aliases_path", None))
+        self._translit: Optional[dict[str, str]] = None if trans == _DEFAULT_TRANSLIT else trans
+        self._alias_names: dict[str, str] = names
+
+    def _normalize(self, name: Optional[str]) -> str:
+        return normalize_corp_name(name, self._translit)
 
     # -- helpers ---------------------------------------------------------- #
     def _key(self) -> str:
@@ -154,6 +238,12 @@ class DartClient(HttpSource):
             self.cache.set_json(
                 self.CORPCODE_NS, "name_to_corp", self._name_to_corp, ttl=self.config.cache_ttl_seconds
             )
+            self.cache.set_json(
+                self.CORPCODE_NS, "name_to_stock_norm", self._name_to_stock_norm, ttl=self.config.cache_ttl_seconds
+            )
+            self.cache.set_json(
+                self.CORPCODE_NS, "name_to_corp_norm", self._name_to_corp_norm, ttl=self.config.cache_ttl_seconds
+            )
         return rows
 
     def _index(self, rows: list[dict[str, Optional[str]]]) -> None:
@@ -161,32 +251,64 @@ class DartClient(HttpSource):
         # name maps: first occurrence wins (names are not guaranteed unique).
         self._name_to_stock = {}
         self._name_to_corp = {}
+        self._name_to_stock_norm = {}
+        self._name_to_corp_norm = {}
         for r in rows:
             name = r["corp_name"]
-            if name and name not in self._name_to_corp:
+            if not name:
+                continue
+            if name not in self._name_to_corp:
                 self._name_to_corp[name] = r["corp_code"]
-            if name and r["stock_code"] and name not in self._name_to_stock:
+            if r["stock_code"] and name not in self._name_to_stock:
                 self._name_to_stock[name] = r["stock_code"]
+            nkey = self._normalize(name)
+            if nkey and nkey not in self._name_to_corp_norm:
+                self._name_to_corp_norm[nkey] = r["corp_code"]
+            if nkey and r["stock_code"] and nkey not in self._name_to_stock_norm:
+                self._name_to_stock_norm[nkey] = r["stock_code"]
+        # alias DB explicit name→stock overrides take precedence over the corpCode heuristic
+        for raw_name, code in self._alias_names.items():
+            nkey = self._normalize(raw_name)
+            if nkey:
+                self._name_to_stock_norm[nkey] = code
 
     def _ensure_index(self, key: str) -> Optional[dict]:
         attr = {
             "stock_to_corp": "_stock_to_corp",
             "name_to_stock": "_name_to_stock",
             "name_to_corp": "_name_to_corp",
+            "name_to_stock_norm": "_name_to_stock_norm",
+            "name_to_corp_norm": "_name_to_corp_norm",
         }[key]
         current = getattr(self, attr)
         if current is None and self.cache is not None:
             current = self.cache.get_json(self.CORPCODE_NS, key)
-            setattr(self, attr, current)
+            if current is None:
+                # Older caches predate the normalized indexes — rebuild in-memory from
+                # the cached full table so resolution still works without a re-sync.
+                allrows = self.cache.get_json(self.CORPCODE_NS, "all")
+                if allrows:
+                    self._index(allrows)
+                    current = getattr(self, attr)
+            else:
+                setattr(self, attr, current)
         return current
 
     def stock_code_for_name(self, name: str) -> Optional[str]:
-        mapping = self._ensure_index("name_to_stock")
-        return mapping.get((name or "").strip()) if mapping else None
+        exact = self._ensure_index("name_to_stock")
+        hit = exact.get((name or "").strip()) if exact else None
+        if hit:
+            return hit
+        norm = self._ensure_index("name_to_stock_norm")
+        return norm.get(self._normalize(name)) if norm else None
 
     def corp_code_for_name(self, name: str) -> Optional[str]:
-        mapping = self._ensure_index("name_to_corp")
-        return mapping.get((name or "").strip()) if mapping else None
+        exact = self._ensure_index("name_to_corp")
+        hit = exact.get((name or "").strip()) if exact else None
+        if hit:
+            return hit
+        norm = self._ensure_index("name_to_corp_norm")
+        return norm.get(self._normalize(name)) if norm else None
 
     def corp_code_for_stock(self, stock_code: str) -> Optional[str]:
         mapping = self._ensure_index("stock_to_corp")
@@ -242,7 +364,9 @@ class DartClient(HttpSource):
         if not self._check_status(data):
             return []
         return [
-            self._parse_holding(row, corp_code, amount_unit) for row in data.get("list", [])
+            self._parse_holding(row, corp_code, amount_unit)
+            for row in data.get("list", [])
+            if not _is_summary_row(row.get("inv_prm"))
         ]
 
     @staticmethod

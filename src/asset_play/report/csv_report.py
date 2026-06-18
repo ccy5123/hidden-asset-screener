@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional, Union
+from typing import Union
 
 import pandas as pd
 

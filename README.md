@@ -45,8 +45,34 @@ cp .env.example .env             # API 키 입력 (모두 무료)
 ```bash
 asset-play sync-corp-codes                 # DART corpCode ↔ stock_code 매핑 동기화
 asset-play screen --universe KOSPI --out out/   # 전체 파이프라인 → CSV + HTML 리포트
+asset-play screen --land-file land.json --out out/   # 검토된 토지/투자부동산 값 주입 (Tier-2, human-in-loop)
 pytest                                     # 테스트 (TDD, SPEC 수용기준 커버)
 ```
+
+`--land-file`은 사업보고서 주석에서 추출·검토한 토지/투자부동산 값을 파이프라인에 주입한다(필지 정밀 NAV는 사람 검토 전제). 파일에 적힌 종목코드는 자동으로 스크리닝 대상에 포함된다.
+
+```json
+// land.json — {종목코드 또는 corp_code: [{LandAsset 필드...}]}  (금액 단위: 원)
+{ "000050": [ { "location_text": "영등포 타임스퀘어", "book_value": 331337332000, "fair_value": 726712601000 } ] }
+```
+
+CSV도 지원한다: `code,location_text,book_value,fair_value,measurement_model` 헤더에 필지별 1행.
+
+두 가지 평가 경로가 자동 적용된다:
+- **공정가치 주석 제공 시** (`fair_value`): 그 값을 시가로 직접 사용 (투자부동산).
+- **소재지·면적만 제공 시** (`location_text`/`pnu` + `area_sqm`, `fair_value` 없음): V-World 지오코더로 PNU를
+  찾고 MOLIT 개별공시지가를 조회해 `면적 × 공시지가 × 보정계수(1.4)`로 추정한다(`ASSET_PLAY_VWORLD_KEY` 필요,
+  파이프라인이 자동 연결). **지번주소 또는 PNU**를 권장한다 — 도로명주소는 PNU로 해석되지 않아 검토 큐로 빠진다.
+
+### 투자처 이름 매칭 (이름→종목코드 DB)
+
+타법인출자현황은 투자처 이름만 주고 종목코드를 주지 않는다(예: `엘지전자(주)`). 매칭 DB
+`src/asset_play/data/name_aliases.json`이 표기 변형을 흡수한다 — `transliterations`(엘지→LG 등 약칭),
+`names`(전체이름→종목코드 override). **코드 수정 없이 이 파일을 편집**해 매칭을 확장하며, 별도 파일을
+`ASSET_PLAY_NAME_ALIASES`로 지정하면 병합된다(사용자 우선).
+
+`screen` 실행 시 상장 매칭에 실패해 비상장으로 분류된 보유분을 장부가순으로 출력하고
+`out/unresolved_names.csv`에 기록한다. 상장사인데 누락된 이름이 보이면 위 DB에 추가하면 된다.
 
 라이브러리로:
 

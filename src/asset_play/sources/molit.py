@@ -10,7 +10,6 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional, Protocol, runtime_checkable
 
-from ..config import Config
 from ..domain.units import to_decimal
 from ..exceptions import ConfigError
 from .base import HttpSource

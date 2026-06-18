@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Optional, Protocol, runtime_checkable
 
-from ..config import Config
 from ..exceptions import ConfigError
 from .base import HttpSource
 
@@ -48,20 +47,18 @@ class VWorldClient(HttpSource):
 
     @staticmethod
     def _parse_pnu(payload: dict) -> Optional[str]:
-        """Extract PNU from a V-World parcel-geocode response. Kept separate for tests."""
+        """Extract PNU from a V-World getcoord response. Kept separate for tests.
+
+        The 19-digit PNU is at ``response.refined.structure.level4LC`` (``result`` only
+        holds x/y coordinates). Road-type addresses leave level4LC blank → None.
+        """
         try:
-            result = payload["response"]
-            if result.get("status") != "OK":
+            resp = payload["response"]
+            if resp.get("status") != "OK":
                 return None
-            items = result.get("result", [])
-            if isinstance(items, dict):
-                items = [items]
-            if not items:
-                return None
-            # parcel geocoding returns the PNU as 'id' in the structure/result
-            first = items[0]
-            return first.get("id") or first.get("pnu") or None
-        except (KeyError, TypeError, IndexError):
+            pnu = resp.get("refined", {}).get("structure", {}).get("level4LC")
+            return pnu or None
+        except (KeyError, TypeError, AttributeError):
             return None
 
     def address_to_pnu(self, address: str) -> Optional[str]:  # pragma: no cover - network/key
