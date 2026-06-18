@@ -20,15 +20,14 @@ htmlcov/
 coverage.xml
 
 # Local cache & artifacts (SPEC-CORE: local cache, reports)
-.cache/
-cache/
+# NOTE: anchored to repo root so they never match the source package src/asset_play/cache/.
+/.cache/
+/cache/
 *.sqlite
 *.sqlite3
 *.parquet
-out/
-reports/
-*.html
-!src/asset_play/report/templates/*.html
+/out/
+/reports/
 
 # Secrets — DART / data.go.kr / V-World keys
 .env
