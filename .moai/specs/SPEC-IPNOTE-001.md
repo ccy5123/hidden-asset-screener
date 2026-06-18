@@ -14,24 +14,32 @@ PNU(6,549억)보다 **포괄적·정확**함이 확인됐다. 이 값은 `docume
 구조화 API에 없어, 지금까지 사람이 수작업으로 land-file에 입력했다. 본 SPEC은 그 추출을
 자동화한다.
 
-## XBRL 태그 규약 (DART 표준)
+## XBRL 태그 규약 — 두 공시 형태 모두 포괄
+
+회사마다 공시 형태가 둘로 갈린다:
+- 분리형(예: 경방): 토지/건물을 `_LandMember`/`_BuildingsMember`로 나눠 공시.
+- 합산형(예: BYC, 한국앤컴퍼니): 토지+건물 합산을 회사 고유 멤버로 한 줄 공시.
+  개념도 `InvestmentPropertyCompleted` / `...AtFairValue` 등 회사별로 다양.
 
 ```
-장부가:   ACODE = ifrs-full_InvestmentProperty
-공정가치: ACODE contains FairValueOfInvestmentProperty
-기준:     ACONTEXT contains _SeparateMember_   (별도; _ConsolidatedMember_ = 연결 제외)
-유형:     ACONTEXT contains _LandMember | _BuildingsMember
+장부가:   ACODE contains InvestmentProperty (FairValue 미포함)
+공정가치: ACODE contains InvestmentProperty AND FairValue   (회사 고유 개념 포함)
+기준:     ACONTEXT contains _SeparateMember (별도 우선) | _ConsolidatedMember (폴백)
+당기:     ACONTEXT startswith CFY (전기 PFY 제외)
 ```
 
-표준 IFRS taxonomy라 회사 무관. 단위만 표 헤더(`단위:천원`)에 있어 회사마다 다름.
+장부·공정가치 cell을 (기준 × 컨텍스트 멤버)로 묶어 **쌍(pair)**으로 만든다. 변동표·원가표는
+공정가치 짝이 없어 자연히 배제(→ 동일 ACODE 오집 방지). `parse_ip_pairs`.
 
-## 단위 자동검출 (대사 안전망)
+## 총액 후보 선택 + 단위 자동검출 (대사 안전망)
 
 ```
-표단위값 land_book + building_book, 배수 u ∈ {1, 1000, 1_000_000}
-(land_book + building_book) × u ≈ BS 별도 투자부동산(원)  →  그 u 채택 (오차 < 2%)
-대사되는 u 없음  →  reconciled=False (자동주입 금지, 사람 검토)
+후보: 분리형은 토지+건물 합, 합산형은 단일 멤버 (별도 우선, 없으면 연결 폴백)
+각 후보 장부 × u ∈ {1, 1000, 1e6} ≈ BS 별도 투자부동산(원)  →  그 후보·u 채택 (오차 < 2%)
+대사되는 후보 없음  →  None (자동주입 금지) — 단위 오판·변동표 오집·날조를 동시 차단
 ```
+
+`resolve_ip_fair_value`. 분리형은 토지 분리값(`land_*`)을 함께 보존해 주입 시 우선 사용.
 
 ## 데이터 소스
 
@@ -58,6 +66,13 @@ PNU(6,549억)보다 **포괄적·정확**함이 확인됐다. 이 값은 `docume
 
 ## 구현 매핑
 
-- `sources/dart_document.py` — `parse_ip_fair_value_cells`, `unit_multiplier_by_reconcile`, `InvestmentPropertyFairValue`.
+- `sources/dart_document.py` — `parse_ip_pairs`, `resolve_ip_fair_value`, `InvestmentPropertyFairValue`.
 - `sources/dart_client.py` — `get_investment_property_fair_value`, `_latest_annual_rcept`, `get_document_xml`.
 - `__main__.py` — `report --auto-land`.
+
+## 커버리지 (실측, 10종목 바스켓)
+
+cost-model 투자부동산 공정가치 주석을 둔 회사만 해당 — 3/10 발견·3/3 대사 성공:
+경방(토지분리, +4,140억), BYC(합산, +8,390억), 한국앤컴퍼니(합산, +1,898억). 나머지 7종목은
+주석 부재(영업용 유형자산 토지만 보유 → geocoding 필요, 또는 공정가치모형 적용 → 숨은이익 없음)
+로 정상 None. 즉 본 파서는 "투자부동산을 원가모형으로 보유 + 공정가치 주석 공시"한 부분집합을 커버.

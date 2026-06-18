@@ -63,9 +63,10 @@ def test_ipfv_extracts_and_reconciles_thousand_won():
     assert ip is not None
     assert ip.reconciled is True
     assert ip.unit_multiplier == 1000
-    assert ip.land_book == Decimal("331337332000")    # 천원 → 원
+    assert ip.land_book == Decimal("331337332000")    # 천원 → 원 (토지 분리값)
     assert ip.land_fair == Decimal("745317499000")
-    assert ip.land_gain == Decimal("413980167000")    # 4,139.8억
+    assert ip.inject_fair == Decimal("745317499000")  # 주입은 토지 우선
+    assert ip.ip_gain == Decimal("413980167000")      # 4,139.8억
 
 
 def test_ipfv_none_when_no_annual_report():
@@ -73,10 +74,10 @@ def test_ipfv_none_when_no_annual_report():
     assert ip is None
 
 
-def test_ipfv_not_reconciled_blocks_autoinject():
-    # BS 투자부동산이 주석과 안 맞으면 reconciled=False → 자동주입 금지 신호
+def test_ipfv_none_when_bs_mismatch_blocks_autoinject():
+    # BS 투자부동산이 주석과 안 맞으면 대사 실패 → None → 자동주입 금지
     ip = _dart(_make_handler(bs_amount="12345")).get_investment_property_fair_value("X", "2025")
-    assert ip is not None and ip.reconciled is False
+    assert ip is None
 
 
 def test_ipfv_cached_second_call_no_session_hit():

@@ -29,8 +29,8 @@ from ..exceptions import ConfigError, QuotaExceededError, SourceError
 from .base import HttpSource, QuotaTracker
 from .dart_document import (
     InvestmentPropertyFairValue,
-    parse_ip_fair_value_cells,
-    unit_multiplier_by_reconcile,
+    parse_ip_pairs,
+    resolve_ip_fair_value,
 )
 
 BASE_URL = "https://opendart.fss.or.kr/api"
@@ -179,8 +179,8 @@ def _ipfv_to_cache(r: InvestmentPropertyFairValue) -> dict:
         return None if v is None else str(v)
 
     return {
+        "ip_book": s(r.ip_book), "ip_fair": s(r.ip_fair),
         "land_book": s(r.land_book), "land_fair": s(r.land_fair),
-        "building_book": s(r.building_book), "building_fair": s(r.building_fair),
         "unit_multiplier": r.unit_multiplier, "reconciled": r.reconciled, "basis": r.basis,
     }
 
@@ -190,8 +190,8 @@ def _ipfv_from_cache(d: dict) -> InvestmentPropertyFairValue:
         return None if v is None else Decimal(v)
 
     return InvestmentPropertyFairValue(
-        land_book=Decimal(d["land_book"]), land_fair=Decimal(d["land_fair"]),
-        building_book=dec(d.get("building_book")), building_fair=dec(d.get("building_fair")),
+        ip_book=Decimal(d["ip_book"]), ip_fair=Decimal(d["ip_fair"]),
+        land_book=dec(d.get("land_book")), land_fair=dec(d.get("land_fair")),
         unit_multiplier=int(d["unit_multiplier"]), reconciled=bool(d["reconciled"]),
         basis=d.get("basis", "OFS"),
     )
@@ -490,15 +490,16 @@ class DartClient(HttpSource):
         (SPEC-IPNOTE-001 AC-2/5). document.xml은 크므로 파싱 결과를 캐시한다.
         """
         ck = f"{corp_code}:{bsns_year}:{reprt_code}"
+        ns = "dart:ipfv2"  # v2 schema (ip_book/ip_fair); bump invalidates old-format entries
         if self.cache is not None:
-            cached = self.cache.get_json("dart:ipfv", ck)
+            cached = self.cache.get_json(ns, ck)
             if cached is not None:
                 return None if cached.get("none") else _ipfv_from_cache(cached)
 
         result = self._compute_ipfv(corp_code, bsns_year, reprt_code)
         if self.cache is not None:
             self.cache.set_json(
-                "dart:ipfv", ck,
+                ns, ck,
                 {"none": True} if result is None else _ipfv_to_cache(result),
             )
         return result
@@ -512,22 +513,12 @@ class DartClient(HttpSource):
         text = self.get_document_xml(rcept)
         if not text:
             return None
-        parsed = parse_ip_fair_value_cells(text)
-        if parsed["land_fair"] is None:  # 공정가치 주석 부재 → 정상적으로 None
+        pairs = parse_ip_pairs(text)
+        if not pairs["OFS"] and not pairs["CFS"]:  # 투자부동산 공정가치 주석 부재 → 정상 None
             return None
         rows = self.get_financial_statements(corp_code, bsns_year, reprt_code, fs_div="OFS")
         bs_ip = extract_account_amount(rows, ["투자부동산"], sj_div="BS") if rows else None
-        u = unit_multiplier_by_reconcile(parsed["land_book"], parsed["building_book"], bs_ip)
-        mult = u or 1000  # 표시용 기본(천원); reconciled=False면 자동주입 금지
-        scale = Decimal(mult)
-        return InvestmentPropertyFairValue(
-            land_book=(parsed["land_book"] or Decimal(0)) * scale,
-            land_fair=parsed["land_fair"] * scale,
-            building_book=(parsed["building_book"] * scale) if parsed["building_book"] else None,
-            building_fair=(parsed["building_fair"] * scale) if parsed["building_fair"] else None,
-            unit_multiplier=mult,
-            reconciled=u is not None,
-        )
+        return resolve_ip_fair_value(pairs, bs_ip)  # 대사 실패 시 None (자동주입 금지)
 
     def get_net_assets(
         self, corp_code: str, bsns_year: str, reprt_code: str = REPORT_ANNUAL

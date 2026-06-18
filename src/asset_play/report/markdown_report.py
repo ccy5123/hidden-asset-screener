@@ -309,11 +309,11 @@ def build_company_report(pipe, stock_code: str, *, bsns_year=None,
             ipfv = pipe.dart.get_investment_property_fair_value(cc, bsns_year)
         except Exception:
             ipfv = None
-        if ipfv and ipfv.reconciled and ipfv.land_fair and ipfv.land_fair > 0:
+        if ipfv and ipfv.reconciled and ipfv.inject_fair and ipfv.inject_fair > 0:
             land_assets.append(LandAsset(
                 holder_corp_code=cc,
                 location_text="투자부동산 토지 (자동: 별도 공정가치 주석)",
-                book_value=ipfv.land_book, fair_value=ipfv.land_fair,
+                book_value=ipfv.inject_book, fair_value=ipfv.inject_fair,
                 measurement_model=MeasurementModel.COST,
             ))
     nav, valuations, review_queue, _unresolved = pipe.value_company(
