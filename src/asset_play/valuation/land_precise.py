@@ -46,7 +46,7 @@ def value_land_precise(
         pnu_source = "asset"
         if not pnu and la.location_text:
             pnu = geocoder.address_to_pnu(la.location_text)
-            pnu_source = "geocoder"
+            pnu_source = getattr(geocoder, "last_match_type", "parcel") or "geocoder"
         if not pnu:
             result.review_queue.append(
                 ReviewQueueItem(
@@ -58,9 +58,25 @@ def value_land_precise(
                 )
             )
             continue
+        # 도로명 자동매칭은 도로 좌표가 인접 필지를 잡을 수 있어 저신뢰 → 사람 확인 (자동확정 금지)
+        if pnu_source == "road":
+            result.review_queue.append(
+                ReviewQueueItem(
+                    holder_corp_code=la.holder_corp_code,
+                    location_text=la.location_text,
+                    area_sqm=la.area_sqm,
+                    book_value=la.book_value,
+                    reason="도로명 소재지 자동매칭(저신뢰) — 지번주소/PNU 확인 필요",
+                    raw={"pnu": pnu},
+                )
+            )
+            continue
 
-        # 2. 면적 확인
-        if la.area_sqm is None or la.area_sqm <= 0:
+        # 2. 면적 확인 (미제공 시 토지특성 API로 자동 조회)
+        area = la.area_sqm
+        if (area is None or area <= 0) and hasattr(land_price_provider, "get_area_sqm"):
+            area = land_price_provider.get_area_sqm(pnu)
+        if area is None or area <= 0:
             result.review_queue.append(
                 ReviewQueueItem(
                     holder_corp_code=la.holder_corp_code,
@@ -90,7 +106,7 @@ def value_land_precise(
 
         # 4. 시가보정계수 적용 (AC-3: 일관 적용 + 출처 기록)
         c = config.correction_factor_for(la.location_text)
-        estimated = (la.area_sqm * price * c).quantize(Decimal(1))
+        estimated = (area * price * c).quantize(Decimal(1))
 
         # confidence: 직접 PNU+가격 → 中, geocoded → 中(매칭 성공). 실패만 검토 큐.
         confidence = (
@@ -130,7 +146,7 @@ def value_land_precise(
                 asset_id=pnu,
                 location_text=la.location_text,
                 pnu=pnu,
-                area_sqm=la.area_sqm,
+                area_sqm=area,
                 official_price_per_sqm=price,
                 correction_factor=c,
                 book_value=la.book_value,

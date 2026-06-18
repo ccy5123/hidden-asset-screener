@@ -17,6 +17,9 @@ from .base import HttpSource
 MOLIT_LAND_PRICE_URL = (
     "https://api.vworld.kr/ned/data/getIndvdLandPriceAttr"  # 개별공시지가 속성 조회
 )
+LAND_CHAR_URL = (
+    "https://api.vworld.kr/ned/data/getLandCharacteristics"  # 토지특성(면적 lndpclAr 포함)
+)
 
 
 @runtime_checkable
@@ -27,19 +30,23 @@ class LandPriceProvider(Protocol):
         self, pnu: str, year: Optional[int] = None
     ) -> Optional[Decimal]: ...
 
+    def get_area_sqm(self, pnu: str, year: Optional[int] = None) -> Optional[Decimal]: ...
+
     def as_of(self, year: Optional[int] = None) -> date: ...
 
 
 class StaticLandPriceProvider:
-    """In-memory 개별공시지가 (원/㎡) keyed by PNU."""
+    """In-memory 개별공시지가 (원/㎡) + 면적 (㎡) keyed by PNU."""
 
     def __init__(
         self,
         prices: Optional[dict[str, Decimal]] = None,
+        areas: Optional[dict[str, Decimal]] = None,
         as_of_year: Optional[int] = None,
         source_name: str = "static-landprice",
     ) -> None:
         self.prices = {k: to_decimal(v) for k, v in (prices or {}).items()}
+        self.areas = {k: to_decimal(v) for k, v in (areas or {}).items()}
         self._year = as_of_year or date.today().year
         self.source_name = source_name
 
@@ -47,6 +54,9 @@ class StaticLandPriceProvider:
         self, pnu: str, year: Optional[int] = None
     ) -> Optional[Decimal]:
         return self.prices.get(pnu)
+
+    def get_area_sqm(self, pnu: str, year: Optional[int] = None) -> Optional[Decimal]:
+        return self.areas.get(pnu)
 
     def as_of(self, year: Optional[int] = None) -> date:
         return date(year or self._year, 1, 1)
@@ -104,3 +114,36 @@ class MolitClient(HttpSource):
             cache_key=f"{pnu}:{year or 'latest'}",
         )
         return self._parse_price(data)
+
+    @staticmethod
+    def _parse_area(payload: dict) -> Optional[Decimal]:
+        """Pull 면적(lndpclAr, ㎡) from a 토지특성(getLandCharacteristics) response, latest year."""
+        block = payload.get("landCharacteristicss", payload)
+        fields = block.get("field", []) if isinstance(block, dict) else []
+        if isinstance(fields, dict):
+            fields = [fields]
+        latest: Optional[Decimal] = None
+        latest_year = -1
+        for f in fields:
+            area = to_decimal(f.get("lndpclAr"))
+            year = int(to_decimal(f.get("stdrYear")) or 0)
+            if area is not None and year >= latest_year:
+                latest, latest_year = area, year
+        return latest
+
+    def get_area_sqm(
+        self, pnu: str, year: Optional[int] = None
+    ) -> Optional[Decimal]:  # pragma: no cover - requires network/key
+        data = self.get_json(
+            LAND_CHAR_URL,
+            params={
+                "key": self._key(),
+                "pnu": pnu,
+                "format": "json",
+                "numOfRows": "50",
+                "stdrYear": str(year) if year else "",
+            },
+            namespace="molit:landchar",
+            cache_key=f"{pnu}:{year or 'latest'}",
+        )
+        return self._parse_area(data)
