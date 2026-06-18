@@ -143,6 +143,37 @@ def _cmd_screen(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_report(args: argparse.Namespace) -> int:
+    from .pipeline import Pipeline
+    from .report.markdown_report import build_company_report, write_markdown
+
+    pipe = Pipeline(Config.from_env())
+    land_by_corp: dict = {}
+    if args.land_file:
+        from .land_file import load_land_assets
+
+        for code, assets in load_land_assets(args.land_file).items():
+            cc = code if len(code) == 8 else None
+            if cc is None:
+                try:
+                    cc = pipe.dart.corp_code_for_stock(code)
+                except SourceError:
+                    cc = None
+            if cc:
+                land_by_corp.setdefault(cc, []).extend(assets)
+
+    report = build_company_report(
+        pipe, args.stock, bsns_year=args.year,
+        compute_catalyst=args.catalyst, land_assets_by_corp=land_by_corp or None,
+    )
+    if report is None:
+        print(f"no data for {args.stock}", file=sys.stderr)
+        return 2
+    path = write_markdown(report, Path(args.out) / f"{report.stock_code}_report.md")
+    print(f"report → {path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="asset-play", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -169,6 +200,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     screen.add_argument("--out", default="out", help="출력 디렉터리 (기본: out)")
     screen.set_defaults(func=_cmd_screen)
+
+    report = sub.add_parser("report", help="종목별 자산가치 점검 Markdown 보고서 (range + 신뢰도)")
+    report.add_argument("--stock", required=True, help="종목코드 (예: 000050)")
+    report.add_argument("--year", help="사업연도 (기본: 작년)")
+    report.add_argument("--land-file", dest="land_file", help="토지 자산 파일 (.json/.csv)")
+    report.add_argument("--catalyst", action="store_true", help="카탈리스트 점수 포함")
+    report.add_argument("--out", default="out", help="출력 디렉터리 (기본: out)")
+    report.set_defaults(func=_cmd_report)
     return parser
 
 
