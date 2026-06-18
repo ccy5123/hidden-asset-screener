@@ -43,6 +43,24 @@ class StaticGeocoder:
         return pnu
 
 
+class CompositeGeocoder:
+    """여러 지오코더를 순서대로 시도 (juso=도로명 정확 / V-World=지번). 첫 성공을 반환."""
+
+    def __init__(self, geocoders: list, source_name: Optional[str] = None) -> None:
+        self.geocoders = [g for g in geocoders if g is not None]
+        self.source_name = source_name or "+".join(g.source_name for g in self.geocoders)
+        self.last_match_type: Optional[str] = None
+
+    def address_to_pnu(self, address: str) -> Optional[str]:
+        self.last_match_type = None
+        for g in self.geocoders:
+            pnu = g.address_to_pnu(address)
+            if pnu:
+                self.last_match_type = getattr(g, "last_match_type", "parcel")
+                return pnu
+        return None
+
+
 class VWorldClient(HttpSource):
     source_name = "V-World"
 

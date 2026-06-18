@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from asset_play.domain.models import LandAsset
 from asset_play.sources.molit import MolitClient, StaticLandPriceProvider
-from asset_play.sources.vworld import StaticGeocoder, VWorldClient
+from asset_play.sources.vworld import CompositeGeocoder, StaticGeocoder, VWorldClient
 from asset_play.valuation.land_precise import value_land_precise
 
 
@@ -42,6 +42,16 @@ def test_precise_auto_fetches_area_when_missing():
     assert len(res.valuations) == 1
     # 500㎡ × 2,000,000 × 1.4 = 1,400,000,000
     assert res.valuations[0].market_value == Decimal("1400000000")
+
+
+def test_composite_geocoder_tries_in_order():
+    juso = StaticGeocoder({"평동산단로191": "2920014600109870000"}, match_type="parcel")
+    vworld = StaticGeocoder({"광주 북구 임동 136-4": "2917010500101360004"})
+    comp = CompositeGeocoder([juso, vworld])
+    assert comp.address_to_pnu("평동산단로191") == "2920014600109870000"  # juso
+    assert comp.address_to_pnu("광주 북구 임동 136-4") == "2917010500101360004"  # falls to vworld
+    assert comp.last_match_type == "parcel"
+    assert comp.address_to_pnu("없는주소") is None
 
 
 def test_road_matched_parcel_routed_to_review_queue():

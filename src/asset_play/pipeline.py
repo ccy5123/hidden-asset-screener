@@ -26,9 +26,10 @@ from .exceptions import QuotaExceededError, SourceError
 from .report.csv_report import write_csv
 from .report.html_report import write_html
 from .sources.dart_client import REPORT_ANNUAL, DartClient
+from .sources.juso import JusoClient
 from .sources.krx import KrxClient, PriceProvider
 from .sources.molit import LandPriceProvider, MolitClient
-from .sources.vworld import Geocoder, VWorldClient
+from .sources.vworld import CompositeGeocoder, Geocoder, VWorldClient
 from .valuation.catalyst import (
     CatalystSignals,
     catalyst_score,
@@ -76,12 +77,23 @@ class Pipeline:
         self.cache = cache or CacheStore(str(self.config.cache_dir / "asset_play.sqlite"))
         self.dart = dart or DartClient(self.config, cache=self.cache)
         self.price_provider = price_provider or KrxClient(self.config, cache=self.cache)
-        # Auto-wire the land providers when a V-World key is configured — both the geocoder
-        # (주소→PNU) and the 개별공시지가 source authenticate with ASSET_PLAY_VWORLD_KEY.
-        # Explicit injection wins; with no key they stay None and the precise path is skipped.
-        self.geocoder = geocoder or (
-            VWorldClient(self.config, cache=self.cache) if self.config.vworld_key else None
-        )
+        # Auto-wire the land providers. Geocoder: juso(도로명→정확 지번) + V-World(지번) 합성 —
+        # juso 먼저, 지번주소는 V-World가 보완. 공시지가·면적(MOLIT)은 VWORLD_KEY로 인증.
+        if geocoder is not None:
+            self.geocoder = geocoder
+        else:
+            geocoders = []
+            if self.config.juso_key:
+                geocoders.append(JusoClient(self.config, cache=self.cache))
+            if self.config.vworld_key:
+                geocoders.append(VWorldClient(self.config, cache=self.cache))
+            self.geocoder = (
+                CompositeGeocoder(geocoders)
+                if len(geocoders) > 1
+                else geocoders[0]
+                if geocoders
+                else None
+            )
         self.land_price_provider = land_price_provider or (
             MolitClient(self.config, cache=self.cache) if self.config.vworld_key else None
         )
