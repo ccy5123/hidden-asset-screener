@@ -42,6 +42,7 @@ class Company(_Base):
     market_cap: Optional[Decimal] = None  # 원
     shares_outstanding: Optional[Decimal] = None
     land_measurement_model: MeasurementModel = MeasurementModel.UNKNOWN
+    establishment_year: Optional[int] = None  # 설립연도 (기업개황 est_dt) — 오래된 회사 스크린
     as_of_date: Optional[date] = None
 
 

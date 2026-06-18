@@ -6,6 +6,7 @@ import argparse
 import csv
 import os
 import sys
+from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
@@ -174,6 +175,42 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_screen_value(args: argparse.Namespace) -> int:
+    from .pipeline import Pipeline
+    from .valuation.screen import value_screen
+
+    stock_codes = _split(args.stock)
+    if not stock_codes:
+        print("pass --stock 000050,001130,...", file=sys.stderr)
+        return 2
+    pipe = Pipeline(Config.from_env())
+    thr = dict(pbr_max=Decimal(str(args.pbr)), equity_ratio_min=Decimal(str(args.equity_ratio)))
+    if args.per is not None:
+        thr["per_max"] = Decimal(str(args.per))
+    if args.founded_before is not None:
+        thr["founded_before"] = args.founded_before
+    results = value_screen(pipe, stock_codes, bsns_year=args.year, **thr)
+
+    def f2(x):
+        return "—" if x is None else f"{float(x):.2f}"
+
+    def fp(x):
+        return "—" if x is None else f"{float(x) * 100:.0f}%"
+
+    print(f"{'종목':<12}{'PBR':>7}{'자기자본':>9}{'PER':>8}{'창업':>7}  통과")
+    print("-" * 50)
+    n_pass = 0
+    for m, ok in results:
+        n_pass += int(ok)
+        print(f"{m.name:<12}{f2(m.pbr):>7}{fp(m.equity_ratio):>9}{f2(m.per):>8}"
+              f"{str(m.founded_year or '—'):>7}  {'✅' if ok else ''}")
+    print(f"\n통과 {n_pass}/{len(results)} "
+          f"(PBR≤{args.pbr} · 자기자본비율≥{args.equity_ratio:.0%}"
+          f"{f' · PER≤{args.per}' if args.per else ''}"
+          f"{f' · 창업≤{args.founded_before}' if args.founded_before else ''})")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="asset-play", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -208,6 +245,17 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--catalyst", action="store_true", help="카탈리스트 점수 포함")
     report.add_argument("--out", default="out", help="출력 디렉터리 (기본: out)")
     report.set_defaults(func=_cmd_report)
+
+    sv = sub.add_parser("screen-value", help="자산가치주 1차 스크린 (PBR·자기자본비율·PER·창업연도)")
+    sv.add_argument("--stock", required=True, help="쉼표구분 종목코드")
+    sv.add_argument("--pbr", type=float, default=0.5, help="PBR 상한 (기본 0.5)")
+    sv.add_argument("--equity-ratio", dest="equity_ratio", type=float, default=0.6,
+                    help="자기자본비율 하한 (기본 0.6)")
+    sv.add_argument("--per", type=float, help="PER 상한 (옵션, 수익성)")
+    sv.add_argument("--founded-before", dest="founded_before", type=int,
+                    help="창업연도 상한 (옵션, 오래된 회사)")
+    sv.add_argument("--year", help="사업연도 (기본: 작년)")
+    sv.set_defaults(func=_cmd_screen_value)
     return parser
 
 

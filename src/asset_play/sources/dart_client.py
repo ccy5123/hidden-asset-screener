@@ -341,11 +341,14 @@ class DartClient(HttpSource):
         if not self._check_status(data):
             return None
         stock = (data.get("stock_code") or "").strip()
+        est = (data.get("est_dt") or "").strip()
+        year = int(est[:4]) if est[:4].isdigit() else None
         return Company(
             corp_code=corp_code,
             stock_code=stock or None,
             name=data.get("corp_name") or data.get("stock_name") or corp_code,
             market=Market.from_dart_corp_cls(data.get("corp_cls")),
+            establishment_year=year,
         )
 
     # -- 타법인출자현황 (SPEC-EQUITY-001) --------------------------------- #
@@ -435,6 +438,26 @@ class DartClient(HttpSource):
         if not rows:
             return None
         return extract_account_amount(rows, ["자본총계", "자본 총계"], sj_div="BS")
+
+    def get_screen_financials(
+        self, corp_code: str, bsns_year: str, reprt_code: str = REPORT_ANNUAL
+    ) -> tuple:
+        """(지배주주지분, 자본총계, 자산총계, 당기순이익) — 연결(CFS), 1차 스크린용 (SPEC-SCREEN-001).
+
+        증권앱 PBR/자기자본비율 정의(연결)와 정합. 지배주주지분이 없으면(별도 보고) 자본총계로 대체.
+        """
+        rows = self.get_financial_statements(corp_code, bsns_year, reprt_code, fs_div="CFS")
+        if not rows:
+            return (None, None, None, None)
+        eq_total = extract_account_amount(rows, ["자본총계", "자본 총계"], sj_div="BS")
+        eq_ctrl = extract_account_amount(
+            rows, ["지배기업 소유주지분", "지배기업소유주지분", "지배기업의 소유주에게 귀속되는 자본"], sj_div="BS"
+        )
+        assets = extract_account_amount(rows, ["자산총계", "자산 총계"], sj_div="BS")
+        net_income = extract_account_amount(
+            rows, ["지배기업소유주지분순이익", "당기순이익(손실)", "당기순이익"], sj_div="IS"
+        )
+        return (eq_ctrl or eq_total, eq_total, assets, net_income)
 
     def get_disclosures(self, corp_code: str, bgn_de: str, end_de: str) -> list[dict]:
         """DART 공시 목록 (list.json), YYYYMMDD 범위 — 카탈리스트 신호용 (SPEC-CATALYST-001)."""

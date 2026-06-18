@@ -108,3 +108,6 @@ class FakeDart:
 
     def get_disclosures(self, corp_code, bgn_de, end_de):
         return list(getattr(self, "disclosures", []) or [])
+
+    def get_screen_financials(self, corp_code, bsns_year, reprt_code=None):
+        return getattr(self, "screen_financials", (None, None, None, None))
