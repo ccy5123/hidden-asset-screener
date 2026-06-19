@@ -131,6 +131,9 @@ class KrAdapter:
     def get_investment_property_fair_value(self, corp_code: str, bsns_year: str):
         return self.dart.get_investment_property_fair_value(corp_code, bsns_year)
 
+    def get_land_holdings(self, corp_code: str, bsns_year: str) -> list:
+        return self.dart.get_land_holdings(corp_code, bsns_year)
+
     # -- pricing (KRX) --------------------------------------------------- #
     def get_market_cap(self, stock_code: str) -> Optional[Decimal]:
         return self.price.get_market_cap(stock_code)

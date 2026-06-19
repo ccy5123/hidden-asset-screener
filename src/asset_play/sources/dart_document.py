@@ -164,3 +164,56 @@ def resolve_ip_fair_value(
                         unit_multiplier=u, basis=basis, reconciled=True,
                     )
     return None
+
+
+# --------------------------------------------------------------------------- #
+# 토지 소재지 명세 (사업보고서 'II. 사업의 내용 > 생산설비 > 토지') — 주소 표시용
+# --------------------------------------------------------------------------- #
+@dataclass
+class LandHolding:
+    """'토지(유형자산 및 투자부동산)' 표 한 줄 — 소재지(주소) + 토지 장부가(원).
+
+    장부가는 토지 기말(유형자산+투자부동산 합산)로, 투자부동산 공정가치 주석(별도)과 범위가 다르다.
+    위치 확인용(어디에 있나) — 含み益/NAV 계산엔 쓰지 않는다(이중계상 방지).
+    """
+
+    office: str        # 사업장 (예: 본사)
+    location: str      # 소재지 (주소)
+    book_value: Decimal  # 토지 장부가 (원)
+
+
+_LH_NUM = re.compile(r"-?\d[\d,]*")
+_LH_UNITS = {"백만원": 1_000_000, "천원": 1_000, "원": 1}
+
+
+def parse_land_holdings(doc_text: str) -> list:
+    """'토지(유형자산 및 투자부동산)' 표 → [LandHolding(사업장·소재지·장부가)]. 표 없으면 []."""
+    anchor = doc_text.find("토지(유형자산 및 투자부동산)")
+    if anchor < 0:
+        return []
+    seg = doc_text[anchor: anchor + 8000]
+    um = re.search(r"단위\s*[:：]\s*(백만원|천원|원)", seg[:700])
+    unit = _LH_UNITS.get(um.group(1), 1_000_000) if um else 1_000_000  # 토지표 관행상 백만원
+    out: list = []
+    for table in re.findall(r"<TABLE.*?</TABLE>", seg, re.S):
+        if "소재지" not in table or "사업장" not in table:
+            continue
+        for tr in re.findall(r"<TR.*?</TR>", table, re.S):
+            cells = [re.sub(r"<[^>]+>", "", c).strip()
+                     for c in re.findall(r"<T[DH][^>]*>(.*?)</T[DH]>", tr, re.S)]
+            if len(cells) < 3:
+                continue
+            office, location = cells[0], cells[1]
+            if (not office or not location
+                    or any(k in office for k in ("합계", "소계", "계", "사업장", "기초"))
+                    or "소재지" in location
+                    or _LH_NUM.fullmatch(location.replace(",", ""))):  # 소재지가 숫자=데이터 아님
+                continue
+            nums = [c.replace(",", "") for c in cells[2:] if _LH_NUM.fullmatch(c.replace(",", ""))]
+            if not nums:
+                continue
+            out.append(LandHolding(office, location, Decimal(nums[-1]) * unit))  # 기말=마지막 숫자
+        if out:
+            break
+    return out
+

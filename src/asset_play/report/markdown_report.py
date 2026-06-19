@@ -399,6 +399,26 @@ def build_company_report(pipe, stock_code: str, *, bsns_year=None,
                 intro="設備현황 + 公示地価/地価調査 추정. 賃貸등不動산(時価 공시분) 제외(중복가드). "
                       "표본·구 median 근사 → 🔴 저신뢰. 정밀은 큰 필지를 路線価로 사람 확인."))
 
+    # 토지 소재지 (KR 회사 공시 '생산설비>토지') — 어디에 있나(주소). 含み益 아님(est=book → 차익 0,
+    # NAV 비반영·이중계상 방지). 투자부동산 공정가치(별도 주석)와 범위가 달라 별도 표시.
+    lh_fn = getattr(pipe.adapter, "get_land_holdings", None)
+    if lh_fn:
+        try:
+            holdings = lh_fn(cc, bsns_year)
+        except Exception:
+            holdings = []
+        lh_lines = [
+            AssetLine(label=h.location, book=h.book_value,
+                      est_low=h.book_value, est_high=h.book_value, confidence="high",
+                      note=f"{h.office} · 회사 공시 토지 장부가(유형자산+투자부동산 합산)")
+            for h in holdings
+        ]
+        if lh_lines:
+            sections.append(ReportSection(
+                "토지 소재지 (회사 공시)", lh_lines,
+                intro="사업장별 토지 소재지·장부가(생산설비 명세). '어디에' 있는지 확인용 — 含み益은 위 "
+                      "투자부동산 공정가치 참조(여기는 차익 표기 없음, 이중계상 방지)."))
+
     return CompanyReport(
         name=nav.name, stock_code=nav.stock_code or stock_code,
         market_cap=nav.market_cap, reported_book_equity=nav.reported_book_equity,

@@ -29,7 +29,9 @@ from ..exceptions import ConfigError, QuotaExceededError, SourceError
 from .base import HttpSource, QuotaTracker
 from .dart_document import (
     InvestmentPropertyFairValue,
+    LandHolding,
     parse_ip_pairs,
+    parse_land_holdings,
     resolve_ip_fair_value,
 )
 
@@ -520,6 +522,29 @@ class DartClient(HttpSource):
         rows = self.get_financial_statements(corp_code, bsns_year, reprt_code, fs_div="OFS")
         bs_ip = extract_account_amount(rows, ["투자부동산"], sj_div="BS") if rows else None
         return resolve_ip_fair_value(pairs, bs_ip)  # 대사 실패 시 None (자동주입 금지)
+
+    def get_land_holdings(self, corp_code: str, bsns_year: str) -> list:
+        """사업보고서 '생산설비>토지' 표의 사업장별 소재지(주소)+장부가 — 위치 표시용(NAV 비반영).
+
+        document.xml은 크므로 소재지/장부가만 캐시한다. 표가 없으면 [].
+        """
+        ns, ck = "dart:landhold", f"{corp_code}:{bsns_year}"
+        if self.cache is not None:
+            cached = self.cache.get_json(ns, ck)
+            if cached is not None:
+                return [
+                    LandHolding(h["office"], h["location"], Decimal(h["book_value"]))
+                    for h in cached
+                ]
+        rcept = self._latest_annual_rcept(corp_code, bsns_year)
+        text = self.get_document_xml(rcept) if rcept else None
+        holdings = parse_land_holdings(text) if text else []
+        if self.cache is not None:
+            self.cache.set_json(ns, ck, [
+                {"office": h.office, "location": h.location, "book_value": str(h.book_value)}
+                for h in holdings
+            ])
+        return holdings
 
     def get_net_assets(
         self, corp_code: str, bsns_year: str, reprt_code: str = REPORT_ANNUAL
