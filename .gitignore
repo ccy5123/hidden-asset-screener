@@ -34,6 +34,9 @@ coverage.xml
 .env.*
 !.env.example
 
+# Streamlit deployment secrets (배포 키) — 예시(.example)만 커밋
+.streamlit/secrets.toml
+
 # Editors / OS
 .idea/
 .vscode/

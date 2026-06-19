@@ -99,6 +99,21 @@ streamlit run app/streamlit_app.py
 - **API 키**: `.env` 우선, 없으면 사이드바에서 입력(세션에만, 저장 안 함). JP `公示地価` GeoJSON은 사이드바에 로컬 경로.
 - **🔍 API 원문 호출 패널**: 실행 시 내부적으로 호출된 모든 API(DART·EDINET·公示地価 등)의 요청 URL·파라미터·응답 원문·소요시간을 펼쳐 확인 — 어느 수치가 어느 호출에서 왔는지 추적(근거 투명성). **키는 `***` 마스킹**(헤더 인증은 애초에 기록 안 함).
 
+### 배포 — 내 키로 다른 사람에게 공유
+
+`.env`는 git에 안 올라가므로, 배포 서버엔 키를 **`st.secrets`**로 심는다(방문자는 키 입력 불필요).
+
+```bash
+# 로컬/사내 서버
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml   # 값 채우기 (git ignore됨)
+streamlit run app/streamlit_app.py
+```
+
+**Streamlit Community Cloud**: 저장소 연결 → 앱 Settings → **Secrets** 에 `.streamlit/secrets.toml.example` 내용을 붙여넣고 값 입력. 키 우선순위 = 실제 환경변수 > `st.secrets` > `.env`.
+
+- **호스트 모드** `ASSET_PLAY_HOSTED = "1"` (secrets): 방문자에게 키/파일 입력 UI를 숨기고 **owner 키로만** 제공. 키는 패널에서도 `***` 마스킹되어 방문자에게 노출되지 않음.
+- ⚠️ **공유 주의(정직)**: 방문자가 당신의 무료 쿼터를 함께 쓴다(DART 20,000회/일 공유). 소규모(지인) 권장, URL은 가급적 비공개. 남용 우려 시 Streamlit Cloud의 뷰어 인증을 켜라.
+
 ## 멀티마켓 (SPEC-ADAPTER-001)
 
 코어(스크린·NAV·집계·리포트)는 **시장무관** — 데이터에만 의존한다. 시장 결합은 `MarketAdapter` 한 곳에 모이고, 새 시장은 어댑터만 추가하면 코어를 그대로 재사용한다.

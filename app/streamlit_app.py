@@ -23,29 +23,42 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
 
 
 def _bootstrap_env() -> None:
-    """프로젝트 루트의 .env를 os.environ에 주입(실행 위치 무관) — 키를 따로 입력할 필요 없음.
+    """배포·로컬 모두에서 '내 키'가 자동 적용되도록 .env + st.secrets 를 os.environ에 주입.
 
-    실제 환경변수가 우선(setdefault). streamlit을 어느 디렉터리에서 띄워도 내 .env가 적용된다.
+    우선순위: 실제 환경변수 > st.secrets(배포: Streamlit Cloud Secrets / .streamlit/secrets.toml)
+    > 프로젝트 .env(로컬). 방문자는 키 입력 없이 호스트(owner)의 키로 사용한다.
+    실행 위치(cwd)와 무관 — 키 이름은 .env와 동일한 ``ASSET_PLAY_*`` 플랫 키.
     """
+    layered: dict[str, str] = {}
+    # 1) .env (로컬, 최저 우선순위)
     env = _ROOT / ".env"
-    if not env.is_file():
-        return
-    for raw in env.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        line = line.removeprefix("export ").strip()
-        key, _, val = line.partition("=")
-        key = key.strip()
-        val = val.strip().strip("'").strip('"')
-        if key:
-            os.environ.setdefault(key, val)
+    if env.is_file():
+        for raw in env.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            line = line.removeprefix("export ").strip()
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip().strip("'").strip('"')
+            if key:
+                layered[key] = val
+    # 2) st.secrets (배포 표준) — .env보다 우선. 평문 str 키만 취함(중첩 섹션 무시).
+    try:
+        for key, val in dict(st.secrets).items():
+            if isinstance(val, str):
+                layered[str(key)] = val
+    except Exception:  # noqa: BLE001 — secrets 미설정 시 st.secrets 접근이 예외
+        pass
+    # 3) 실제 환경변수가 최우선 → setdefault 로 덮어쓰지 않음.
+    for key, val in layered.items():
+        os.environ.setdefault(key, val)
 
 
 _bootstrap_env()
 
 from asset_play.config import Config  # noqa: E402
-from asset_play.exceptions import SourceError  # noqa: E402
+from asset_play.exceptions import ConfigError, SourceError  # noqa: E402
 from asset_play.market import make_pipeline, resolve_market  # noqa: E402
 from asset_play.report import frames  # noqa: E402
 from asset_play.report.csv_report import results_to_dataframe  # noqa: E402
@@ -69,41 +82,61 @@ def _load_landprice_index(paths: tuple):
 # --------------------------------------------------------------------------- #
 # Sidebar — 키(.env 우선 + 보완) · 시장 · 연도 · JP GeoJSON
 # --------------------------------------------------------------------------- #
+def _is_hosted() -> bool:
+    """호스트(공유) 모드 — owner의 키로 방문자에게 제공. 키/파일 입력 UI를 숨긴다.
+
+    ASSET_PLAY_HOSTED=1 (secrets/env)로 켠다. 방문자는 시장/연도/종목만 다룬다.
+    """
+    return os.environ.get("ASSET_PLAY_HOSTED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+_KEY_SPECS = [
+    ("dart_api_key", "DART (KR 공시·재무)"),
+    ("edinet_key", "EDINET (JP 有報)"),
+    ("jquants_key", "J-Quants (JP 주가)"),
+    ("vworld_key", "V-World (KR 공시지가·면적)"),
+    ("juso_key", "juso (KR 도로명주소)"),
+]
+
+
 def _sidebar() -> tuple:
     st.sidebar.title("⚙️ 설정")
     base = Config.from_env()
+    hosted = _is_hosted()
 
-    st.sidebar.subheader("API 키")
-    st.sidebar.caption(
-        f"프로젝트 .env 자동 사용 ({_ROOT / '.env'}). 아래는 .env에 없는 키만 임시 보완(세션에만, 저장 안 함)."
-    )
-    key_specs = [
-        ("dart_api_key", "DART (KR 공시·재무)"),
-        ("edinet_key", "EDINET (JP 有報)"),
-        ("jquants_key", "J-Quants (JP 주가)"),
-        ("vworld_key", "V-World (KR 공시지가·면적)"),
-        ("juso_key", "juso (KR 도로명주소)"),
-    ]
     overrides: dict = {}
-    for field, label in key_specs:
-        present = bool(getattr(base, field))
-        status = "✅ .env" if present else "— 미설정"
-        val = st.sidebar.text_input(
-            f"{label}  ({status})", value="", type="password",
-            placeholder="비우면 .env 사용", key=f"k_{field}",
-        )
-        if val:
-            overrides[field] = val
+    if hosted:
+        ready = [label for field, label in _KEY_SPECS if getattr(base, field)]
+        st.sidebar.success("호스트 키로 제공 중 — 키 입력 불필요.")
+        if ready:
+            st.sidebar.caption("사용 가능: " + ", ".join(s.split(" (")[0] for s in ready))
+    else:
+        st.sidebar.subheader("API 키")
+        present = [label for field, label in _KEY_SPECS if getattr(base, field)]
+        missing = [(field, label) for field, label in _KEY_SPECS if not getattr(base, field)]
+        if present:
+            st.sidebar.caption("✅ 서버측 설정됨: " + ", ".join(s.split(" (")[0] for s in present))
+        if missing:
+            st.sidebar.caption("아래 미설정 키만 임시 보완(세션에만, 저장 안 함):")
+            for field, label in missing:
+                val = st.sidebar.text_input(f"{label}  (미설정)", value="", type="password",
+                                            placeholder="키 입력", key=f"k_{field}")
+                if val:
+                    overrides[field] = val
+        else:
+            st.sidebar.caption("배포 시 .streamlit/secrets.toml 또는 Streamlit Cloud Secrets로 키 고정.")
 
     st.sidebar.subheader("시장 / 연도")
     market_label = st.sidebar.radio("시장 판별", list(_MARKET_OVERRIDE), index=0)
     market_override = _MARKET_OVERRIDE[market_label]
     year = st.sidebar.text_input("사업연도", value="", placeholder="비우면 작년").strip() or None
 
-    st.sidebar.subheader("JP 公示地価 GeoJSON (선택)")
-    st.sidebar.caption("国土数値情報 L01/L02 로컬 경로 — 줄/쉼표로 여러 개. 영업용 토지 含み益 추정용.")
-    default_lp = "\n".join(str(p) for p in base.landprice_files)
-    landprice_raw = st.sidebar.text_area("GeoJSON 경로", value=default_lp, height=80)
+    landprice_raw = ""
+    if not hosted:
+        st.sidebar.subheader("JP 公示地価 GeoJSON (선택)")
+        st.sidebar.caption("国土数値情報 L01/L02 로컬 경로 — 줄/쉼표로 여러 개. 영업용 토지 含み益 추정용.")
+        default_lp = "\n".join(str(p) for p in base.landprice_files)
+        landprice_raw = st.sidebar.text_area("GeoJSON 경로", value=default_lp, height=80)
 
     cfg = Config.from_env()
     # 캐시를 프로젝트 루트에 고정(실행 위치 무관) — corpCode 동기화 캐시 등 재사용.
@@ -151,6 +184,19 @@ def _jp_index(cfg: Config):
 # --------------------------------------------------------------------------- #
 # 공통 렌더
 # --------------------------------------------------------------------------- #
+def _render_run_error(exc: Exception) -> None:
+    """실행 예외를 친절히 표시 — 키 미설정은 배포 설정법을 안내(겁나는 traceback 금지)."""
+    if isinstance(exc, ConfigError):
+        st.error(
+            f"🔑 API 키 미설정: {exc}\n\n"
+            "**배포(공유) 시**: `.streamlit/secrets.toml`(로컬) 또는 Streamlit Cloud의 **Secrets**에 "
+            "`ASSET_PLAY_DART_API_KEY = \"...\"` 등을 넣으면 방문자는 키 없이 사용합니다. "
+            "`.streamlit/secrets.toml.example` 참고."
+        )
+    else:
+        st.error(f"실행 오류: {type(exc).__name__}: {exc}")
+
+
 def _render_api_log(rec) -> None:
     calls = list(getattr(rec, "calls", []) or [])
     net = [c for c in calls if not c.cache_hit]
@@ -241,7 +287,7 @@ def _tab_report(cfg, market_override, year) -> None:
                     pipe, code, bsns_year=year, compute_catalyst=catalyst, auto_land=auto_land,
                 )
             except Exception as exc:  # noqa: BLE001 — 사용자에게 원인 표시
-                st.error(f"실행 오류: {type(exc).__name__}: {exc}")
+                _render_run_error(exc)
                 _render_api_log(rec)
                 return
         if report is None:
@@ -283,7 +329,7 @@ def _tab_screen_value(cfg, market_override, year) -> None:
                     _ensure_kr_corpcodes(pipe)
                 results = value_screen(pipe, codes, bsns_year=year, **thr)
             except Exception as exc:  # noqa: BLE001
-                st.error(f"실행 오류: {type(exc).__name__}: {exc}")
+                _render_run_error(exc)
                 _render_api_log(rec)
                 return
         if not results:
@@ -319,7 +365,7 @@ def _tab_rank(cfg, market_override, year) -> None:
                     _ensure_kr_corpcodes(pipe)
                 run = pipe.run(stock_codes=codes, bsns_year=year, compute_catalyst=catalyst)
             except Exception as exc:  # noqa: BLE001
-                st.error(f"실행 오류: {type(exc).__name__}: {exc}")
+                _render_run_error(exc)
                 _render_api_log(rec)
                 return
         if not run.results:
