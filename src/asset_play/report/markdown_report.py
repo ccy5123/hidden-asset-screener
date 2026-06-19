@@ -70,6 +70,8 @@ class CompanyReport:
     source: str = ""
     asof: Optional[date] = None
     footnotes: list = field(default_factory=list)  # list[str]
+    currency: str = ""  # 시장별 통화 표기 (예: "원(₩)"/"엔(¥)")
+    equity_label: str = "별도(OFS) 자본총계"  # NAV 기준자본 라벨 (시장별)
 
 
 def _lines(report: CompanyReport) -> list:
@@ -133,6 +135,8 @@ def render_markdown(report: CompanyReport) -> str:
     meta = []
     if report.source:
         meta.append(f"출처 {report.source}")
+    if report.currency:
+        meta.append(f"통화 {report.currency}")
     if report.asof:
         meta.append(f"시세 기준 {report.asof.isoformat()}")
     if meta:
@@ -151,7 +155,7 @@ def render_markdown(report: CompanyReport) -> str:
 
     scen = scenario_navs(report)
     o.append(f"## {n}. 종합 NAV — 케이스별 range\n")
-    o.append(f"- 시총 **{_eok(report.market_cap)}** · 별도(OFS) 자본총계 **{_eok(report.reported_book_equity)}**")
+    o.append(f"- 시총 **{_eok(report.market_cap)}** · {report.equity_label} **{_eok(report.reported_book_equity)}**")
     if scen:
         nds = [nd for *_, nd in scen if nd is not None]
         if nds:
@@ -238,9 +242,9 @@ def _unlisted_line(v) -> AssetLine:
     )
 
 
-def _ip_line(v) -> AssetLine:
+def _ip_line(v, label: str = "투자부동산(공정가치 주석)") -> AssetLine:
     return AssetLine(
-        label="투자부동산(공정가치 주석)", book=v.book_value,
+        label=label, book=v.book_value,
         est_low=v.market_value, est_high=v.market_value, confidence="high",
         note="회사 공시 공정가치 — 영업용 토지보다 신뢰 높음.",
     )
@@ -281,10 +285,11 @@ def _review_line(r) -> AssetLine:
     )
 
 
-def sections_from_valuations(valuations, review_queue=None) -> list:
+def sections_from_valuations(valuations, review_queue=None, *, ip_label="투자부동산(공정가치 주석)") -> list:
     """per-item 평가 + 검토대기 → 보고서 섹션(상장지분 종목별 / 비상장 / 투자부동산·토지 필지별).
 
     순수 함수(입력만 의존) — 평가 모델 리스트만 받아 ReportSection 리스트를 만든다.
+    ``ip_label``: 투자부동산 라인 라벨(시장별 — KR 투자부동산 / JP 賃貸등不動산).
     """
     eq, unl, land = [], [], []
     for v in valuations or []:
@@ -294,7 +299,7 @@ def sections_from_valuations(valuations, review_queue=None) -> list:
         elif ac == AssetClass.UNLISTED_EQUITY:
             unl.append(_unlisted_line(v))
         elif ac == AssetClass.INVESTMENT_PROPERTY:
-            land.append(_ip_line(v))
+            land.append(_ip_line(v, ip_label))
         elif ac == AssetClass.LAND:
             land.append(_land_line(v))
         else:
@@ -365,17 +370,23 @@ def build_company_report(pipe, stock_code: str, *, bsns_year=None,
         )
     except Exception:
         screen = None
+    # 시장별 라벨(통화·출처·지표명·각주) — 어댑터가 제공(없으면 KR 기본).
+    labels = getattr(pipe.adapter, "labels", None)
+    src = labels.source if labels else "DART 사업보고서"
+    ip_label = labels.ip_label if labels else "투자부동산(공정가치 주석)"
     return CompanyReport(
         name=nav.name, stock_code=nav.stock_code or stock_code,
         market_cap=nav.market_cap, reported_book_equity=nav.reported_book_equity,
-        sections=sections_from_valuations(valuations, review_queue), screen=screen,
+        sections=sections_from_valuations(valuations, review_queue, ip_label=ip_label), screen=screen,
         catalyst_score=nav.catalyst_score, value_trap=nav.catalyst_value_trap,
-        source=f"DART 사업보고서({bsns_year}) · 자동집계",
+        source=f"{src}({bsns_year}) · 자동집계",
         asof=nav.as_of_date,
-        footnotes=[
+        currency=(labels.currency if labels else ""),
+        equity_label=(labels.equity_label if labels else "별도(OFS) 자본총계"),
+        footnotes=(list(labels.footnotes) if labels else [
             "장부·자본총계 = 별도(OFS) 기준. 시세 = 현재 KRX 종가.",
             "상장지분 range: S0 보수=장부 계상액(취득시점), S1·S2=현재 시가 (2시점).",
             "토지 range: S0=취득원가(장부), S1=공시지가×면적, S2=시가보정. 🔴 검토대기 필지는 S2 상한에만 가산(불확실).",
             "비상장은 순자산×지분율 근사, 시장가 아님.",
-        ],
+        ]),
     )

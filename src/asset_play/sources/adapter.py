@@ -12,12 +12,47 @@ from ``get_investment_property_fair_value`` — NAV then uses screen + listed ho
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from typing import Optional, Protocol, runtime_checkable
 
 from ..domain.enums import Market
 from ..domain.models import Company
+
+
+@dataclass
+class MarketLabels:
+    """시장별 리포트 표기(통화·출처·지표명·각주). 코어 로직은 불변, 라벨만 시장 인지."""
+
+    currency: str         # 통화 표기 (예: "원(₩)" / "엔(¥)")
+    source: str           # 출처명 (예: "DART 사업보고서" / "EDINET 有価証券報告書")
+    asof_label: str       # 시세 출처 (예: "KRX 종가" / "J-Quants 종가")
+    equity_label: str     # NAV 기준자본 라벨 (예: "별도(OFS) 자본총계" / "連結 지배지분")
+    ip_label: str         # 투자부동산/含み益 라인 라벨
+    footnotes: list = field(default_factory=list)
+
+
+_KR_LABELS = MarketLabels(
+    currency="원(₩)", source="DART 사업보고서", asof_label="KRX 종가",
+    equity_label="별도(OFS) 자본총계", ip_label="투자부동산(공정가치 주석)",
+    footnotes=[
+        "장부·자본총계 = 별도(OFS) 기준. 시세 = 현재 KRX 종가.",
+        "상장지분 range: S0 보수=장부 계상액(취득시점), S1·S2=현재 시가 (2시점).",
+        "토지 range: S0=취득원가(장부), S1=공시지가×면적, S2=시가보정. 🔴 검토대기 필지는 S2 상한에만 가산(불확실).",
+        "비상장은 순자산×지분율 근사, 시장가 아님.",
+    ],
+)
+_JP_LABELS = MarketLabels(
+    currency="엔(¥)", source="EDINET 有価証券報告書", asof_label="J-Quants 종가",
+    equity_label="連結 지배지분(純資産−非支配)", ip_label="賃貸等不動産(時価 주석)",
+    footnotes=[
+        "재무·자본 = 連結(지배지분) 기준. 시세 = J-Quants 일봉 종가 × 발행주식수.",
+        "賃貸등不動산 range: S0 보수=連結B/S 計上額(帳簿), S1·S2=会社 公示 期末時価.",
+        "賃貸등不動산은 순수 임대분 + 사용겸용분 합산(사용겸용은 영업용 포함 — 보수적으로 時価 그대로).",
+        "JP v1: 타법인출자 지분평가·카탈리스트 미지원(EDINET 持株 공시로 후속).",
+    ],
+)
 
 
 @runtime_checkable
@@ -56,6 +91,8 @@ class KrAdapter:
 
     순수 델리게이트(로직 0): 기존 동작을 그대로 보존한다(SPEC-ADAPTER-001 AC-1).
     """
+
+    labels = _KR_LABELS
 
     def __init__(self, dart, price_provider) -> None:
         self.dart = dart
@@ -109,6 +146,8 @@ class JpAdapter:
     타법인출자 지분평가·카탈리스트는 미지원(빈값) — EDINET에 직접 대응이 없어 후속.
     corp_code = EDINET docID. 財務·賃貸등不動산은 같은 有報 CSV에서, 시총은 J-Quants 종가×발행주식수.
     """
+
+    labels = _JP_LABELS
 
     def __init__(self, edinet, jquants, *, dates: Optional[list] = None) -> None:
         from .jp_edinet import recent_business_dates
