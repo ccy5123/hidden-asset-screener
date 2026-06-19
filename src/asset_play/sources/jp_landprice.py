@@ -58,18 +58,47 @@ class LandPricePoint:
     muni: str        # 市区町村 토큰
     use: str         # 標準地 用途 원문
     price: Decimal   # 円/㎡
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
+
+def _km(lat1, lon1, lat2, lon2) -> float:
+    """근사 거리(km) — 일본 위도대(1°lat≈111km, 1°lon≈91km) 평면근사."""
+    import math
+    return math.hypot((lat1 - lat2) * 111.0, (lon1 - lon2) * 91.0)
 
 
 class JpLandPriceIndex:
-    """市区町村 × 카테고리 → 円/㎡ median 인덱스 (보수적 폴백 포함)."""
+    """市区町村 × 카테고리 → 円/㎡ median 인덱스 (보수적 폴백 + 좌표 최근접 #3)."""
 
     def __init__(self, points: list) -> None:
         self.by_muni: dict = {}
+        self.points: list = []  # (lat, lon, category, price) — 좌표 최근접용
         for p in points:
             cat = category_of(p.use)
             b = self.by_muni.setdefault(p.muni, {})
             b.setdefault(cat, []).append(p.price)
             b.setdefault("ALL", []).append(p.price)
+            if p.lat is not None and p.lon is not None:
+                self.points.append((p.lat, p.lon, cat, p.price))
+
+    def nearest_price(self, lat: float, lon: float, category: str, max_km: float = 4.0) -> tuple:
+        """좌표에서 max_km 내 동일 用途 최근접 標準地 円/㎡. (price|None, 'med'|'low', 'nearest Nkm')."""
+        best = best_any = None
+        for plat, plon, cat, price in self.points:
+            d = _km(lat, lon, plat, plon)
+            if d > max_km:
+                continue
+            if best_any is None or d < best_any[0]:
+                best_any = (d, price)
+            if cat == category and (best is None or d < best[0]):
+                best = (d, price)
+        if best:
+            return (best[1], "med", f"최근접 {best[0]:.1f}km({category})")
+        if best_any:  # 用途 일치 없으면 인근 아무 표준지 × 보수할인
+            disc = _DISCOUNT.get(category, Decimal("0.8"))
+            return ((best_any[1] * disc).quantize(Decimal(1)), "low", f"최근접 {best_any[0]:.1f}km×{disc}")
+        return (None, "low", "반경 내 표준지 없음")
 
     def _bucket(self, muni: Optional[str]) -> Optional[dict]:
         if not muni:
@@ -121,11 +150,24 @@ class OperatingLandEstimate:
         return (self.estimate - self.book) if self.estimate is not None else None
 
 
-def estimate_operating_land(facilities: list, index: JpLandPriceIndex) -> list:
-    """facilities: [(location, area㎡, book円, category)] → [OperatingLandEstimate]."""
+def estimate_operating_land(facilities: list, index: JpLandPriceIndex, *, geocoder=None) -> list:
+    """facilities: [(location, area㎡, book円, category)] → [OperatingLandEstimate].
+
+    ``geocoder``(선택, GSI 등): 시설 주소→좌표 시 **좌표 최근접 표준지**(#3, 구 경계 무관)를 우선
+    사용. 좌표 미확보·반경 밖이면 市区町村 median 폴백.
+    """
     out = []
     for loc, area, book, cat in facilities:
-        pps, conf, matched = index.price_per_sqm(muni_token(loc), cat)
+        pps = conf = matched = None
+        if geocoder is not None:
+            try:
+                coord = geocoder.geocode(loc)
+            except Exception:
+                coord = None
+            if coord:
+                pps, conf, matched = index.nearest_price(coord[0], coord[1], cat)
+        if pps is None:  # 좌표 실패 → 市区町村 median
+            pps, conf, matched = index.price_per_sqm(muni_token(loc), cat)
         est = (pps * Decimal(area)) if (pps is not None and area) else None
         out.append(OperatingLandEstimate(
             location=loc, area=Decimal(area), book=Decimal(book), category=cat,
@@ -162,7 +204,11 @@ def load_landprice_geojson(geojson_path: str) -> list:
         price = p.get("L01_006", p.get("L02_006"))  # 当年 公示価格/基準地価格 (円/㎡)
         mu = muni_token(_detect_address(p))
         if mu and isinstance(price, (int, float)) and price > 0:
-            points.append(LandPricePoint(muni=mu, use=_detect_use(p), price=Decimal(int(price))))
+            geom = f.get("geometry") or {}
+            c = geom.get("coordinates")
+            lon, lat = (c[0], c[1]) if isinstance(c, list) and len(c) >= 2 else (None, None)
+            points.append(LandPricePoint(
+                muni=mu, use=_detect_use(p), price=Decimal(int(price)), lat=lat, lon=lon))
     return points
 
 

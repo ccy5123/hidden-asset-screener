@@ -150,13 +150,14 @@ class JpAdapter:
     labels = _JP_LABELS
 
     def __init__(self, edinet, jquants, *, dates: Optional[list] = None,
-                 landprice_index=None) -> None:
+                 landprice_index=None, geocoder=None) -> None:
         from .jp_edinet import recent_business_dates
 
         self.edinet = edinet
         self.jquants = jquants
         self.dates = dates or recent_business_dates(40)
         self.landprice_index = landprice_index  # JpLandPriceIndex (영업용 토지 추정용; None이면 미사용)
+        self.geocoder = geocoder  # GsiGeocoder (좌표 최근접 #3; None이면 市区町村 median)
         self._meta: dict = {}   # stock_code → 有報 메타(dict) | None
         self._csv: dict = {}    # docID → CSV 텍스트
         self._fin: dict = {}    # docID → parse_jp_financials 결과
@@ -244,7 +245,8 @@ class JpAdapter:
             self._html[corp_code] = self.edinet.get_document_html(corp_code) or ""
         facs = parse_facilities_html(self._html[corp_code])
         items = [(f["location"], f["area"], f["book_yen"], f["category"]) for f in facs]
-        self._opland[corp_code] = estimate_operating_land(items, self.landprice_index)
+        self._opland[corp_code] = estimate_operating_land(
+            items, self.landprice_index, geocoder=self.geocoder)
         return self._opland[corp_code]
 
     def price_as_of(self) -> date:

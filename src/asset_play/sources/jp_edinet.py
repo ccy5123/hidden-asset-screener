@@ -106,6 +106,33 @@ class EdinetClient(HttpSource):
         return ""
 
 
+class GsiGeocoder:
+    """国土地理院 주소→좌표 (무료·무키, SPEC-JP-002 #3). geocode(addr) → (lat, lon) | None."""
+
+    URL = "https://msearch.gsi.go.jp/address-search/AddressSearch"
+
+    def __init__(self, cache=None) -> None:
+        self.cache = cache
+
+    def geocode(self, address: str):
+        if not address:
+            return None
+        import requests
+
+        try:
+            r = requests.get(self.URL, params={"q": address},
+                             headers={"User-Agent": "asset-play/0.1"}, timeout=20)
+        except Exception:
+            return None
+        if r.status_code != 200:
+            return None
+        feats = r.json() or []
+        if not feats:
+            return None
+        c = (feats[0].get("geometry") or {}).get("coordinates")
+        return (c[1], c[0]) if isinstance(c, list) and len(c) >= 2 else None  # (lat, lon)
+
+
 class JQuantsClient:
     """J-Quants V2 일봉 종가 (x-api-key). 무료플랜 주가용."""
 

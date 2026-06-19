@@ -96,6 +96,35 @@ def test_generic_loader_handles_l01_and_l02_codes(tmp_path):
     assert category_of(munis["筑紫野市"].use) == "industrial"   # 工場 내용탐지
 
 
+def test_nearest_price_prefers_same_use_within_radius():
+    pts = [
+        LandPricePoint("A", "工場", Decimal("40000"), lat=35.000, lon=139.000),
+        LandPricePoint("A", "住宅", Decimal("100000"), lat=35.001, lon=139.001),
+        LandPricePoint("B", "工場", Decimal("30000"), lat=36.000, lon=140.000),  # 멀리(>4km)
+    ]
+    idx = JpLandPriceIndex(pts)
+    price, conf, matched = idx.nearest_price(35.0, 139.0, "industrial", max_km=4)
+    assert price == Decimal("40000") and conf == "med" and "최근접" in matched
+
+
+def test_nearest_price_none_outside_radius():
+    idx = JpLandPriceIndex([LandPricePoint("A", "工場", Decimal("40000"), lat=40.0, lon=140.0)])
+    assert idx.nearest_price(35.0, 139.0, "industrial", max_km=4)[0] is None
+
+
+def test_estimate_uses_geocoder_nearest_when_available():
+    idx = JpLandPriceIndex([LandPricePoint("筑紫野市", "工場", Decimal("50000"),
+                                           lat=33.5, lon=130.5)])
+
+    class _Geo:
+        def geocode(self, addr):
+            return (33.5, 130.5)
+
+    est = estimate_operating_land(
+        [("福岡県筑紫野市", 1000, 10_000_000, "industrial")], idx, geocoder=_Geo())[0]
+    assert est.price_per_sqm == Decimal("50000") and "최근접" in est.matched
+
+
 def test_build_index_from_files_merges(tmp_path):
     g1 = {"features": [{"properties": {"L02_022": "福岡県筑紫野市原田", "L02_025": "住宅", "L02_006": 90000}}]}
     g2 = {"features": [{"properties": {"L01_006": 40000, "addr": "福岡県筑紫野市原田", "use": "工場"}}]}
