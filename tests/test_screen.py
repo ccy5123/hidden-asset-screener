@@ -2,11 +2,38 @@
 
 from decimal import Decimal
 
+from asset_play.exceptions import SourceError
 from asset_play.valuation.screen import (
     ScreenMetrics,
     compute_screen_metrics,
     passes_value_screen,
+    value_screen,
 )
+
+
+def test_value_screen_degrades_when_market_cap_raises():
+    # 시세 라이브러리 부재/장애로 get_market_cap이 예외여도 스크린이 죽지 않고 market_cap=None.
+    class _Adapter:
+        def corp_code_for_stock(self, sc):
+            return "C" + sc
+
+        def get_company(self, cc):
+            return None
+
+        def get_screen_financials(self, cc, year):
+            return (Decimal("1"), Decimal("1"), Decimal("1"), Decimal("1"))
+
+        def get_market_cap(self, sc):
+            raise SourceError("FinanceDataReader not installed")
+
+    class _Pipe:
+        adapter = _Adapter()
+
+    results = value_screen(_Pipe(), ["000050"], bsns_year="2024")
+    assert len(results) == 1
+    metrics, _ok = results[0]
+    assert metrics.market_cap is None      # degrade — 크래시 없음
+    assert metrics.pbr is None             # 시총 없으니 PBR도 None
 
 
 def test_compute_metrics_kyungbang():

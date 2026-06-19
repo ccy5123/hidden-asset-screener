@@ -1,0 +1,9 @@
+# 배포(Streamlit Community Cloud 등) 런타임 의존성 — `app/streamlit_app.py`.
+# 앱은 src/ 를 sys.path에 추가해 asset_play를 임포트하므로 패키지 설치는 불필요하고,
+# 아래 의존성만 있으면 된다. 로컬 개발은 `pip install -e ".[dev,app,krx]"` 권장.
+streamlit>=1.30
+pydantic>=2.5
+pandas>=2.0
+requests>=2.28
+jinja2>=3.1
+finance-datareader>=0.9   # KR 시세(시가총액) — 없으면 nav_discount 미산출(앱은 동작)

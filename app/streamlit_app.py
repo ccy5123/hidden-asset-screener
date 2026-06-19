@@ -221,6 +221,9 @@ def _render_report(report, market: str) -> None:
     st.subheader(f"{report.name} ({report.stock_code})")
     st.caption(f"{report.source} · 통화 {report.currency or '—'} · 시세기준 "
                f"{report.asof.isoformat() if report.asof else '—'}")
+    if report.market_cap is None:
+        st.warning("시세(시가총액)를 가져오지 못했습니다 — nav_discount 미산출(장부·자산 가치는 그대로). "
+                   "KR은 `finance-datareader` 설치 필요: `pip install finance-datareader` 후 앱 재시작.")
 
     metrics = frames.overview_metrics(report)
     cols = st.columns(len(metrics))

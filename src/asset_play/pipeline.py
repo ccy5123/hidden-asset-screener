@@ -126,7 +126,11 @@ class Pipeline:
             company.stock_code = stock_code
         company.as_of_date = as_of
         if company.stock_code:
-            company.market_cap = self.adapter.get_market_cap(company.stock_code)
+            # 시세(시총)는 비필수 — 시세 라이브러리 부재/네트워크 실패 시 None으로 degrade(리포트는 유지).
+            try:
+                company.market_cap = self.adapter.get_market_cap(company.stock_code)
+            except Exception:  # noqa: BLE001 — 외부 시세 소스(fdr/KRX) 장애가 리포트를 죽이지 않게
+                company.market_cap = None
         return company
 
     def value_company(

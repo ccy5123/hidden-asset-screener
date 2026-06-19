@@ -82,9 +82,13 @@ def value_screen(pipe, stock_codes, *, bsns_year=None, **thresholds):
             continue
         company = pipe.adapter.get_company(cc)
         eq_ctrl, eq_total, assets, ni = pipe.adapter.get_screen_financials(cc, bsns_year)
+        try:
+            mcap = pipe.adapter.get_market_cap(sc)  # 시세 비필수 — 실패 시 PBR/PER만 미산출
+        except Exception:
+            mcap = None
         m = compute_screen_metrics(
             name=(company.name if company else sc), stock_code=sc,
-            market_cap=pipe.adapter.get_market_cap(sc),
+            market_cap=mcap,
             equity_controlling=eq_ctrl, equity_total=eq_total, assets_total=assets, net_income=ni,
             founded_year=(company.establishment_year if company else None),
         )
