@@ -153,7 +153,7 @@ class JpAdapter:
     labels = _JP_LABELS
 
     def __init__(self, edinet, jquants, *, dates: Optional[list] = None,
-                 landprice_index=None, geocoder=None) -> None:
+                 landprice_index=None, geocoder=None, reinfolib=None) -> None:
         from .jp_edinet import recent_business_dates
 
         self.edinet = edinet
@@ -161,8 +161,9 @@ class JpAdapter:
         # 有報는 연 1회(결산월+3개월) 제출 → 어느 결산월 회사든 잡으려면 ~1년 창. find_yuho는
         # 최신순으로 훑다 첫 매칭에서 멈추므로, 최근 제출사는 그대로 빠르다(창 크기 무관).
         self.dates = dates or recent_business_dates(300)
-        self.landprice_index = landprice_index  # JpLandPriceIndex (영업용 토지 추정용; None이면 미사용)
-        self.geocoder = geocoder  # GsiGeocoder (좌표 최근접 #3; None이면 市区町村 median)
+        self.landprice_index = landprice_index  # JpLandPriceIndex (GeoJSON 파일 경로; None이면 미사용)
+        self.reinfolib = reinfolib  # ReinfolibClient (地価 API — 파일 없이 Cloud OK; 있으면 우선)
+        self.geocoder = geocoder  # GsiGeocoder (좌표 최근접; reinfolib 경로는 필수)
         self._meta: dict = {}   # stock_code → 有報 메타(dict) | None
         self._csv: dict = {}    # docID → CSV 텍스트
         self._fin: dict = {}    # docID → parse_jp_financials 결과
@@ -235,23 +236,28 @@ class JpAdapter:
         return shares * close if (shares is not None and close is not None) else None
 
     def operating_land(self, corp_code: str) -> list:
-        """영업용(자사전용) 토지 含み益 추정 (SPEC-JP-002) — 設備현황 파싱 + 公示地価 인덱스.
+        """영업용(자사전용) 토지 含み益 추정 (SPEC-JP-002) — 設備현황 파싱 + 公示地価.
 
-        賃貸등不動산(時価 공시분)은 파서가 제외(중복가드). landprice_index 없으면 빈 리스트.
+        賃貸등不動산(時価 공시분)은 파서가 제외(중복가드). 公示地価 소스 우선순위:
+        reinfolib API(파일 없이 Cloud OK) > GeoJSON 인덱스. 둘 다 없으면 빈 리스트.
         """
-        if self.landprice_index is None:
+        if self.reinfolib is None and self.landprice_index is None:
             return []
         if corp_code in self._opland:
             return self._opland[corp_code]
         from .jp_edinet_document import parse_facilities_html
-        from .jp_landprice import estimate_operating_land
+        from .jp_landprice import estimate_operating_land, estimate_operating_land_reinfolib
 
         if corp_code not in self._html:
             self._html[corp_code] = self.edinet.get_document_html(corp_code) or ""
         facs = parse_facilities_html(self._html[corp_code])
         items = [(f["location"], f["area"], f["book_yen"], f["category"]) for f in facs]
-        self._opland[corp_code] = estimate_operating_land(
-            items, self.landprice_index, geocoder=self.geocoder)
+        if self.reinfolib is not None:
+            self._opland[corp_code] = estimate_operating_land_reinfolib(
+                items, self.reinfolib, self.geocoder)
+        else:
+            self._opland[corp_code] = estimate_operating_land(
+                items, self.landprice_index, geocoder=self.geocoder)
         return self._opland[corp_code]
 
     def price_as_of(self) -> date:

@@ -176,6 +176,38 @@ def estimate_operating_land(facilities: list, index: JpLandPriceIndex, *, geocod
     return out
 
 
+def estimate_operating_land_reinfolib(facilities: list, client, geocoder) -> list:
+    """reinfolib API판 — facilities를 지오코딩→해당 타일 標準地 조회→좌표 최근접으로 추정.
+
+    GeoJSON 파일 없이 동작(Cloud용). 시설마다 1회 지오코딩(좌표) + 1회 reinfolib 타일 조회.
+    좌표 미확보·타일 표준지 없음 → 🔴/미산출. (geocoder 필수 — 타일·최근접 둘 다 좌표 필요)
+    """
+    out = []
+    for loc, area, book, cat in facilities:
+        pps = est = None
+        conf, matched = "low", "좌표 미확보"
+        coord = None
+        if geocoder is not None:
+            try:
+                coord = geocoder.geocode(loc)
+            except Exception:
+                coord = None
+        if coord:
+            pts = client.land_points(coord[0], coord[1])
+            if pts:
+                idx = JpLandPriceIndex(pts)              # 타일 내 標準地로 미니 인덱스 → 최근접
+                pps, conf, matched = idx.nearest_price(coord[0], coord[1], cat)
+            else:
+                conf, matched = "low", "타일 내 표준지 없음"
+        if pps is not None and area:
+            est = pps * Decimal(area)
+        out.append(OperatingLandEstimate(
+            location=loc, area=Decimal(area), book=Decimal(book), category=cat,
+            price_per_sqm=pps, estimate=est, confidence=conf, matched=f"reinfolib · {matched}",
+        ))
+    return out
+
+
 def _detect_address(props: dict) -> Optional[str]:
     """프로퍼티 중 都道府県+市区町村 형태의 전체 주소(예: L02_022/L01_xxx) 자동 탐지."""
     for v in props.values():

@@ -69,11 +69,19 @@ def make_pipeline(
         return Pipeline(config, price_provider=_kr_price_provider(config, cache), cache=cache)
 
     from .sources.adapter import JpAdapter
-    from .sources.jp_edinet import EdinetClient, JQuantsClient, recent_business_dates
+    from .sources.jp_edinet import EdinetClient, GsiGeocoder, JQuantsClient, recent_business_dates
 
     cache = CacheStore(str(config.cache_dir / "asset_play.sqlite"))
+    # 公示地価 소스: reinfolib API(키 있으면 우선 — 파일 없이 Cloud OK) > GeoJSON 파일 인덱스.
+    reinfolib = geocoder = None
     index = landprice_index
-    if index is None:
+    if config.reinfolib_key:
+        from .sources.reinfolib import ReinfolibClient
+
+        reinfolib = ReinfolibClient(config, cache=cache)
+        geocoder = GsiGeocoder(cache=cache)  # reinfolib 타일·최근접에 좌표 필요
+        index = None
+    elif index is None:
         files = list(extra_landprice or []) + [str(p) for p in (config.landprice_files or [])]
         if files:
             from .sources.jp_landprice import build_index_from_files
@@ -83,6 +91,6 @@ def make_pipeline(
         EdinetClient(config, cache=cache),
         JQuantsClient(config, cache=cache),
         dates=recent_business_dates(300),  # 有報 연1회 → ~1년 창(첫 매칭에서 멈춤)
-        landprice_index=index,
+        landprice_index=index, reinfolib=reinfolib, geocoder=geocoder,
     )
     return Pipeline(config, adapter=adapter, cache=cache)

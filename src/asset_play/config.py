@@ -55,6 +55,8 @@ class Config(BaseModel):
     juso_key: Optional[str] = None  # 행안부 도로명주소 검색API (도로명→지번/PNU)
     edinet_key: Optional[str] = None  # EDINET API v2 (JP 有報 XBRL) — Subscription-Key
     jquants_key: Optional[str] = None  # J-Quants V2 (JP 주가) — x-api-key
+    reinfolib_key: Optional[str] = None  # 国土交通省 부동산정보 라이브러리 — JP 地価 API(헤더 인증)
+    reinfolib_year: Optional[int] = None  # 地価公示 대상연도 (없으면 작년 — 항상 공시됨)
 
     # JP 영업용 토지 公示地価/地価調査 GeoJSON(L01/L02) 경로들 — 비면 영업용 토지 추정 생략(graceful).
     landprice_files: list[Path] = Field(default_factory=list)
@@ -129,6 +131,10 @@ class Config(BaseModel):
             juso_key=e.get("ASSET_PLAY_JUSO_KEY") or None,
             edinet_key=e.get("ASSET_PLAY_EDINET_KEY") or None,
             jquants_key=e.get("ASSET_PLAY_JQUANTS_KEY") or None,
+            reinfolib_key=e.get("ASSET_PLAY_REINFOLIB_KEY") or None,
+            reinfolib_year=(
+                int(e["ASSET_PLAY_REINFOLIB_YEAR"]) if e.get("ASSET_PLAY_REINFOLIB_YEAR") else None
+            ),
             landprice_files=_paths("ASSET_PLAY_LANDPRICE_FILES"),
             price_source=(e.get("ASSET_PLAY_PRICE_SOURCE") or "auto").strip().lower() or "auto",
             name_aliases_path=(
