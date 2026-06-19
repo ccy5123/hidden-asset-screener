@@ -82,7 +82,7 @@ def make_pipeline(
     adapter = JpAdapter(
         EdinetClient(config, cache=cache),
         JQuantsClient(config, cache=cache),
-        dates=recent_business_dates(40),
+        dates=recent_business_dates(300),  # 有報 연1회 → ~1년 창(첫 매칭에서 멈춤)
         landprice_index=index,
     )
     return Pipeline(config, adapter=adapter, cache=cache)

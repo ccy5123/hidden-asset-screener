@@ -155,7 +155,9 @@ class JpAdapter:
 
         self.edinet = edinet
         self.jquants = jquants
-        self.dates = dates or recent_business_dates(40)
+        # 有報는 연 1회(결산월+3개월) 제출 → 어느 결산월 회사든 잡으려면 ~1년 창. find_yuho는
+        # 최신순으로 훑다 첫 매칭에서 멈추므로, 최근 제출사는 그대로 빠르다(창 크기 무관).
+        self.dates = dates or recent_business_dates(300)
         self.landprice_index = landprice_index  # JpLandPriceIndex (영업용 토지 추정용; None이면 미사용)
         self.geocoder = geocoder  # GsiGeocoder (좌표 최근접 #3; None이면 市区町村 median)
         self._meta: dict = {}   # stock_code → 有報 메타(dict) | None
