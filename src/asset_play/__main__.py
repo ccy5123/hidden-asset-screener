@@ -173,6 +173,20 @@ def _cmd_report(args: argparse.Namespace) -> int:
         return 2
     path = write_markdown(report, Path(args.out) / f"{report.stock_code}_report.md")
     print(f"report → {path}")
+
+    if getattr(args, "review", False):
+        from .report.review import claude_review
+
+        rev = claude_review(path, model=args.review_model)
+        if rev:
+            rpath = path.with_name(f"{path.stem}_review.md")
+            rpath.write_text(
+                f"# 검수 (Claude) — {report.name} ({report.stock_code})\n\n{rev}\n",
+                encoding="utf-8",
+            )
+            print(f"검수 → {rpath}")
+        else:
+            print("검수 건너뜀 (claude CLI 미발견 또는 실패)", file=sys.stderr)
     return 0
 
 
@@ -251,6 +265,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report.add_argument("--catalyst", action="store_true", help="카탈리스트 점수 포함")
     report.add_argument("--out", default="out", help="출력 디렉터리 (기본: out)")
+    report.add_argument(
+        "--review",
+        action="store_true",
+        help="생성 후 Claude로 적대적 검수 (기본 off; claude CLI 필요) → 별도 _review.md",
+    )
+    report.add_argument(
+        "--review-model",
+        dest="review_model",
+        help="검수 모델 (옵션, 예: opus); 미지정 시 claude CLI 기본값",
+    )
     report.set_defaults(func=_cmd_report)
 
     sv = sub.add_parser("screen-value", help="자산가치주 1차 스크린 (PBR·자기자본비율·PER·창업연도)")
