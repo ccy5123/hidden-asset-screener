@@ -15,6 +15,7 @@ from typing import Optional
 
 from ..exceptions import ConfigError
 from .base import HttpSource
+from .recorder import active_recorder, preview_text, record
 
 EDINET_BASE = "https://api.edinet-fsa.go.jp/api/v2"
 JQUANTS_BASE = "https://api.jquants.com/v2"
@@ -118,12 +119,24 @@ class GsiGeocoder:
         if not address:
             return None
         import requests
+        import time as _time
 
+        rec_on = active_recorder() is not None
+        t0 = _time.perf_counter()
         try:
             r = requests.get(self.URL, params={"q": address},
                              headers={"User-Agent": "asset-play/0.1"}, timeout=20)
-        except Exception:
+        except Exception as exc:
+            if rec_on:
+                record("GSI", self.URL, params={"q": address}, ok=False,
+                       elapsed_ms=(_time.perf_counter() - t0) * 1000,
+                       preview=f"ERROR: {type(exc).__name__}: {exc}")
             return None
+        if rec_on:
+            ok = r.status_code == 200
+            record("GSI", self.URL, params={"q": address}, status=r.status_code, ok=ok,
+                   elapsed_ms=(_time.perf_counter() - t0) * 1000,
+                   preview=preview_text(r.json() if ok else r.text))
         if r.status_code != 200:
             return None
         feats = r.json() or []
@@ -147,16 +160,29 @@ class JQuantsClient:
             return None
         code5 = stock_code if len(stock_code) == 5 else f"{stock_code}0"
         import requests
+        import time as _time
 
+        url = f"{JQUANTS_BASE}/equities/bars/daily"
+        rec_on = active_recorder() is not None
+        t0 = _time.perf_counter()
         try:
             r = requests.get(
-                f"{JQUANTS_BASE}/equities/bars/daily",
-                params={"code": code5},
+                url,
+                params={"code": code5},  # x-api-key는 헤더 — 기록되지 않음(키 비노출)
                 headers={"x-api-key": self.config.jquants_key, "User-Agent": "asset-play/0.1"},
                 timeout=30,
             )
-        except Exception:
+        except Exception as exc:
+            if rec_on:
+                record("J-Quants", url, params={"code": code5}, ok=False,
+                       elapsed_ms=(_time.perf_counter() - t0) * 1000,
+                       preview=f"ERROR: {type(exc).__name__}: {exc}")
             return None
+        if rec_on:
+            ok = r.status_code == 200
+            record("J-Quants", url, params={"code": code5}, status=r.status_code, ok=ok,
+                   elapsed_ms=(_time.perf_counter() - t0) * 1000,
+                   preview=preview_text(r.json() if ok else r.text))
         if r.status_code != 200:
             return None
         data = (r.json() or {}).get("data", [])

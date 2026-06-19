@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "asset-play"
 version = "0.1.0"
-description = "Asset-Play Screener — quantify hidden-asset value (含み資産) of Korean listed companies via NAV gap analysis"
+description = "Asset-Play Screener — quantify hidden-asset value (含み資産) of Korean (DART) and Japanese (EDINET) listed companies via NAV gap analysis"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "asset-play" }]
-keywords = ["finance", "korea", "dart", "krx", "nav", "valuation", "hidden-asset"]
+keywords = ["finance", "korea", "japan", "dart", "edinet", "krx", "nav", "valuation", "hidden-asset"]
 
 dependencies = [
     "pydantic>=2.5",
@@ -26,6 +26,8 @@ krx = ["finance-datareader>=0.9", "pykrx>=1.0"]
 # Convenience DART/notes parsers. The bundled DartClient uses `requests`
 # directly, so these are not required — provided for advanced note parsing.
 dart = ["OpenDartReader>=0.2", "dart-fss>=0.4"]
+# Streamlit web UI (app/streamlit_app.py). Run: streamlit run app/streamlit_app.py
+app = ["streamlit>=1.30"]
 dev = ["pytest>=7.4", "pytest-cov>=4.1"]
 
 [project.scripts]

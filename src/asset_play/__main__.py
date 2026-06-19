@@ -13,6 +13,7 @@ from typing import Optional
 from .config import Config
 from .domain.enums import Market
 from .exceptions import SourceError
+from .market import detect_market, make_pipeline, resolve_market  # noqa: F401 (re-export for tests)
 
 
 def _load_dotenv(path: str = ".env") -> None:
@@ -43,58 +44,6 @@ def _split(value: Optional[str]) -> list[str]:
     return [v.strip() for v in (value or "").split(",") if v.strip()]
 
 
-def detect_market(code: str, override: Optional[str] = None) -> str:
-    """종목코드 자리수로 시장 판별 — JP 티커=4자리, KR 종목=6자리(corp_code=8). override 우선.
-
-    KR과 JP는 종목코드 자리수가 달라 충돌하지 않는다(사용자 관찰). 4자리만 JP, 나머지는 KR.
-    """
-    if override:
-        ov = override.strip().lower()
-        if ov not in ("kr", "jp"):
-            raise SystemExit(f"unknown --market {override!r} (use kr|jp)")
-        return ov
-    return "jp" if len(code.strip()) == 4 else "kr"
-
-
-def _resolve_market(codes: list[str], override: Optional[str]) -> str:
-    """여러 코드의 시장을 판별 — 모두 같은 시장이어야 함(한 파이프라인=한 어댑터). 비면 KR 기본."""
-    if override:
-        return detect_market("", override)
-    markets = {detect_market(c) for c in codes if c}
-    if len(markets) > 1:
-        raise SystemExit(
-            "한 번에 한 시장만: KR(6자리)·JP(4자리) 종목을 섞지 마세요 (또는 --market kr|jp)"
-        )
-    return markets.pop() if markets else "kr"
-
-
-def _make_pipeline(config: Config, market: str, *, extra_landprice: Optional[list[str]] = None):
-    """시장에 맞는 어댑터를 주입한 Pipeline. KR=기본(DART+KRX), JP=EDINET+J-Quants(+公示地価)."""
-    from .pipeline import Pipeline
-
-    if market != "jp":
-        return Pipeline(config)
-
-    from .cache import CacheStore
-    from .sources.adapter import JpAdapter
-    from .sources.jp_edinet import EdinetClient, JQuantsClient, recent_business_dates
-
-    cache = CacheStore(str(config.cache_dir / "asset_play.sqlite"))
-    files = list(extra_landprice or []) + [str(p) for p in (config.landprice_files or [])]
-    index = None
-    if files:
-        from .sources.jp_landprice import build_index_from_files
-
-        index = build_index_from_files(*files)  # 영업용 토지 公示地価 인덱스 (없으면 None=섹션 생략)
-    adapter = JpAdapter(
-        EdinetClient(config, cache=cache),
-        JQuantsClient(config, cache=cache),
-        dates=recent_business_dates(40),
-        landprice_index=index,
-    )
-    return Pipeline(config, adapter=adapter, cache=cache)
-
-
 def _cmd_sync(args: argparse.Namespace) -> int:
     from .pipeline import Pipeline
 
@@ -117,8 +66,8 @@ def _cmd_screen(args: argparse.Namespace) -> int:
     stock_codes = _split(args.stock)
     corp_codes = _split(args.corp)
     # 시장 판별(KR 6자리 / JP 4자리) — corp_code(8자리)는 KR로 판정됨. 섞이면 거부.
-    market = _resolve_market(stock_codes, getattr(args, "market", None))
-    pipe = _make_pipeline(config, market, extra_landprice=getattr(args, "landprice_files", None))
+    market = resolve_market(stock_codes, getattr(args, "market", None))
+    pipe = make_pipeline(config, market, extra_landprice=getattr(args, "landprice_files", None))
 
     if not stock_codes and not corp_codes and args.all:
         rows = pipe.cache.get_json("dart:corpcode", "all") or pipe.sync_corp_codes()
@@ -200,8 +149,8 @@ def _cmd_report(args: argparse.Namespace) -> int:
     from .report.markdown_report import build_company_report, write_markdown
 
     config = Config.from_env()
-    market = _resolve_market([args.stock], getattr(args, "market", None))
-    pipe = _make_pipeline(config, market, extra_landprice=getattr(args, "landprice_files", None))
+    market = resolve_market([args.stock], getattr(args, "market", None))
+    pipe = make_pipeline(config, market, extra_landprice=getattr(args, "landprice_files", None))
     land_by_corp: dict = {}
     if args.land_file:
         from .land_file import load_land_assets
@@ -250,8 +199,8 @@ def _cmd_screen_value(args: argparse.Namespace) -> int:
     if not stock_codes:
         print("pass --stock 000050,001130,...", file=sys.stderr)
         return 2
-    market = _resolve_market(stock_codes, getattr(args, "market", None))
-    pipe = _make_pipeline(Config.from_env(), market)
+    market = resolve_market(stock_codes, getattr(args, "market", None))
+    pipe = make_pipeline(Config.from_env(), market)
     thr = dict(pbr_max=Decimal(str(args.pbr)), equity_ratio_min=Decimal(str(args.equity_ratio)))
     if args.per is not None:
         thr["per_max"] = Decimal(str(args.per))
@@ -362,7 +311,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     _load_dotenv()
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except ValueError as exc:  # 시장 판별 실패 등 사용자 입력 오류 → 종료코드 2
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

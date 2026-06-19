@@ -13,6 +13,7 @@ from typing import Any, Callable, Optional, Protocol
 from ..cache import CacheStore
 from ..config import Config
 from ..exceptions import QuotaExceededError, RateLimitError, SourceError
+from .recorder import active_recorder, preview_text, record
 
 
 class _Response(Protocol):
@@ -51,6 +52,8 @@ class QuotaTracker:
 
 class HttpSource:
     """Base for HTTP-backed sources with cache + exponential backoff + quota."""
+
+    source_name: str = "http"
 
     def __init__(
         self,
@@ -112,6 +115,7 @@ class HttpSource:
                 raise last_exc
             if resp.status_code != 200:
                 raise SourceError(f"HTTP {resp.status_code} from {url}")
+            self._last_status = resp.status_code  # API 원문 기록용(get_json/get_bytes에서 참조)
             return resp
 
         # Unreachable, but keep type-checkers happy.
@@ -128,11 +132,28 @@ class HttpSource:
     ) -> Any:
         """Cached JSON GET. A cache hit performs **no** external call (CORE AC-2)."""
         use_cache = self.cache is not None and namespace and cache_key
+        rec_on = active_recorder() is not None
         if use_cache:
             cached = self.cache.get_json(namespace, cache_key)
             if cached is not None:
+                if rec_on:
+                    record(self.source_name, url, params=params, status=None,
+                           cache_hit=True, preview=preview_text(cached))
                 return cached
-        data = self._request(url, params).json()
+        t0 = time.perf_counter()
+        try:
+            data = self._request(url, params).json()
+        except Exception as exc:
+            if rec_on:
+                record(self.source_name, url, params=params,
+                       status=getattr(self, "_last_status", None),
+                       elapsed_ms=(time.perf_counter() - t0) * 1000, ok=False,
+                       preview=f"ERROR: {type(exc).__name__}: {exc}")
+            raise
+        if rec_on:
+            record(self.source_name, url, params=params,
+                   status=getattr(self, "_last_status", None),
+                   elapsed_ms=(time.perf_counter() - t0) * 1000, preview=preview_text(data))
         if use_cache:
             self.cache.set_json(
                 namespace,
@@ -143,4 +164,19 @@ class HttpSource:
         return data
 
     def get_bytes(self, url: str, params: Optional[dict] = None) -> bytes:
-        return self._request(url, params).content
+        rec_on = active_recorder() is not None
+        t0 = time.perf_counter()
+        try:
+            content = self._request(url, params).content
+        except Exception as exc:
+            if rec_on:
+                record(self.source_name, url, params=params,
+                       status=getattr(self, "_last_status", None),
+                       elapsed_ms=(time.perf_counter() - t0) * 1000, ok=False,
+                       preview=f"ERROR: {type(exc).__name__}: {exc}")
+            raise
+        if rec_on:
+            record(self.source_name, url, params=params,
+                   status=getattr(self, "_last_status", None),
+                   elapsed_ms=(time.perf_counter() - t0) * 1000, preview=preview_text(content))
+        return content

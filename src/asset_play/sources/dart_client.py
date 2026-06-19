@@ -198,6 +198,7 @@ def _ipfv_from_cache(d: dict) -> InvestmentPropertyFairValue:
 
 
 class DartClient(HttpSource):
+    source_name = "DART"
     CORPCODE_NS = "dart:corpcode"
 
     def __init__(self, config: Optional[Config] = None, **kwargs: Any) -> None:

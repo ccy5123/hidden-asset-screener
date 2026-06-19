@@ -125,6 +125,16 @@ def test_estimate_uses_geocoder_nearest_when_available():
     assert est.price_per_sqm == Decimal("50000") and "최근접" in est.matched
 
 
+def test_build_index_raises_on_malformed_geojson(tmp_path):
+    # 손상 GeoJSON은 예외 → Streamlit 앱(_jp_index)이 이를 잡아 graceful degrade(영업용 토지 생략).
+    bad = tmp_path / "bad.geojson"
+    bad.write_text("{ not valid json", encoding="utf-8")
+    import pytest
+
+    with pytest.raises(Exception):
+        build_index_from_files(str(bad))
+
+
 def test_build_index_from_files_merges(tmp_path):
     g1 = {"features": [{"properties": {"L02_022": "福岡県筑紫野市原田", "L02_025": "住宅", "L02_006": 90000}}]}
     g2 = {"features": [{"properties": {"L01_006": 40000, "addr": "福岡県筑紫野市原田", "use": "工場"}}]}
