@@ -49,4 +49,7 @@
 - `sources/adapter.py` — `JpAdapter(landprice_index=)` + `operating_land()` (part2).
 - `report/markdown_report.py` — '영업용 토지 含み益' 섹션(🟡🔴, est_high=추정 → S2 상한 가산,
   추정<장부는 제외) (part2).
-- (후속) L01(地価公示) 로더 추가·用途 정밀화·좌표 최근접 매칭.
+- `jp_landprice.py` — `load_landprice_geojson`(L01/L02 범용 자동인식)·`build_index_from_files`(병합),
+  주거 median 기준 보수 폴백, `nearest_price`(좌표 최근접) + `jp_edinet.GsiGeocoder` (#1·#2·#3 완료).
+  · #1 L01 병합 검증: 西日本鉄道 筑紫野市 🔴 주거×0.6 → 🟡 industrial 직접매칭, 표준지 2.2배.
+  · #3 좌표 최근접은 구 단위 주소에서 노이즈 큼(실증) → 기본 OFF(정밀 주소 전용 인프라).
