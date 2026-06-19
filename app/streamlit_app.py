@@ -298,6 +298,13 @@ def _tab_report(cfg, market_override, year) -> None:
             st.error(f"데이터 없음: {code} ({market.upper()}) — 코드/시장/키를 확인하세요.")
         else:
             _render_report(report, market)
+            # auto-land를 켰는데 부동산 섹션이 없으면 — 조용히 빠지지 않게 이유 안내.
+            has_land = any(("토지" in s.title or "부동산" in s.title) for s in report.sections)
+            if auto_land and not has_land:
+                st.info("투자부동산 공정가치 주석을 추출하지 못했습니다 — 회사가 해당 연도에 미공시이거나 "
+                        "BS 단위대사 실패. **사업연도를 비워두면**(기본=작년 최신 보고서) 보통 잡힙니다. "
+                        "구버전 보고서(예: 2년 전)는 주석 구조가 달라 None일 수 있어요. "
+                        "🔍 아래 'API 원문 호출' 패널에서 document.xml 호출 결과를 확인하세요.")
         _render_api_log(rec)
 
 
