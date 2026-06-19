@@ -59,6 +59,9 @@ class Config(BaseModel):
     # JP 영업용 토지 公示地価/地価調査 GeoJSON(L01/L02) 경로들 — 비면 영업용 토지 추정 생략(graceful).
     landprice_files: list[Path] = Field(default_factory=list)
 
+    # KR 시세 소스: auto(=Yahoo 우선·KRX 폴백) | yahoo | krx. Cloud(해외 IP)는 KRX 차단 → Yahoo.
+    price_source: str = "auto"
+
     # Optional user name-alias DB merged over the packaged default (investee→stock matching).
     name_aliases_path: Optional[Path] = None
 
@@ -127,6 +130,7 @@ class Config(BaseModel):
             edinet_key=e.get("ASSET_PLAY_EDINET_KEY") or None,
             jquants_key=e.get("ASSET_PLAY_JQUANTS_KEY") or None,
             landprice_files=_paths("ASSET_PLAY_LANDPRICE_FILES"),
+            price_source=(e.get("ASSET_PLAY_PRICE_SOURCE") or "auto").strip().lower() or "auto",
             name_aliases_path=(
                 Path(e["ASSET_PLAY_NAME_ALIASES"]) if e.get("ASSET_PLAY_NAME_ALIASES") else None
             ),

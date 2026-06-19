@@ -132,3 +132,45 @@ class KrxClient:
         if self.cache is not None and shares is not None:
             self.cache.set_json("krx:shares", stock_code, str(shares), ttl=self.config.cache_ttl_seconds)
         return shares
+
+
+class CompositePriceProvider:
+    """여러 PriceProvider를 순서대로 시도 — 먼저 값을 주는 소스 채택(예외/None이면 다음).
+
+    KR 시세: 보통 [Yahoo, KRX]. Yahoo는 해외 IP(Cloud)에서도 되고, KRX는 한국 IP 정확.
+    한쪽이 막혀도(KRX 해외차단·Yahoo 레이트리밋) 다른 쪽이 받아 nav_discount를 유지한다.
+    """
+
+    source_name = "composite"
+
+    def __init__(self, providers: list) -> None:
+        self.providers = [p for p in providers if p is not None]
+
+    def _first(self, method: str, *args):
+        for p in self.providers:
+            try:
+                value = getattr(p, method)(*args)
+            except Exception:  # noqa: BLE001 — 한 소스 장애가 전체를 막지 않게(다음 소스로)
+                continue
+            if value is not None:
+                return value
+        return None
+
+    def get_close_price(self, stock_code: str, on: Optional[date] = None) -> Optional[Decimal]:
+        return self._first("get_close_price", stock_code, on)
+
+    def get_market_cap(self, stock_code: str, on: Optional[date] = None) -> Optional[Decimal]:
+        return self._first("get_market_cap", stock_code, on)
+
+    def get_shares_outstanding(
+        self, stock_code: str, on: Optional[date] = None
+    ) -> Optional[Decimal]:
+        return self._first("get_shares_outstanding", stock_code, on)
+
+    def as_of(self, on: Optional[date] = None) -> date:
+        for p in self.providers:
+            try:
+                return p.as_of(on)
+            except Exception:  # noqa: BLE001
+                continue
+        return on or date.today()

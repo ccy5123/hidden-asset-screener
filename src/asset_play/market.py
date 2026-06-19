@@ -31,6 +31,25 @@ def resolve_market(codes: list[str], override: Optional[str] = None) -> str:
     return markets.pop() if markets else "kr"
 
 
+def _kr_price_provider(config: Config, cache):
+    """KR 시세 제공자 — price_source: auto(Yahoo 우선·KRX 폴백) | yahoo | krx.
+
+    Cloud(해외 IP)는 KRX(data.krx.co.kr)가 차단되어 fdr 실패 → Yahoo(키 불필요)로 받는다.
+    한국 IP 로컬은 KRX도 되지만 Yahoo 우선이 이식성↑(둘 다 근사 일치).
+    """
+    from .sources.krx import CompositePriceProvider, KrxClient
+    from .sources.yahoo import YahooPriceProvider
+
+    src = (config.price_source or "auto").lower()
+    if src == "krx":
+        return KrxClient(config, cache=cache)
+    if src == "yahoo":
+        return YahooPriceProvider(config, cache=cache)
+    return CompositePriceProvider(
+        [YahooPriceProvider(config, cache=cache), KrxClient(config, cache=cache)]
+    )
+
+
 def make_pipeline(
     config: Config,
     market: str,
@@ -42,12 +61,13 @@ def make_pipeline(
 
     ``landprice_index`` 를 미리 만들어 넘기면(앱이 캐시한 인덱스 등) 재로딩을 생략한다.
     """
+    from .cache import CacheStore
     from .pipeline import Pipeline
 
     if market != "jp":
-        return Pipeline(config)
+        cache = CacheStore(str(config.cache_dir / "asset_play.sqlite"))
+        return Pipeline(config, price_provider=_kr_price_provider(config, cache), cache=cache)
 
-    from .cache import CacheStore
     from .sources.adapter import JpAdapter
     from .sources.jp_edinet import EdinetClient, JQuantsClient, recent_business_dates
 

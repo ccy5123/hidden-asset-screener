@@ -79,8 +79,9 @@ def test_claude_review_noop_on_empty_stdout(tmp_path, monkeypatch):
 
 
 class _FakePipeline:
-    def __init__(self, config=None):
+    def __init__(self, config=None, **kwargs):  # make_pipeline가 price_provider/cache 주입
         self.dart = None
+        self.adapter = None
 
 
 def _wire_report(monkeypatch, tmp_path, *, review_out):

@@ -22,7 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 # External market-data adapters (KRX scraping libs). Optional: the KrxClient
 # degrades to an injected PriceProvider when these are not installed.
-krx = ["finance-datareader>=0.9", "pykrx>=1.0"]
+krx = ["yfinance>=0.2", "finance-datareader>=0.9", "pykrx>=1.0"]
 # Convenience DART/notes parsers. The bundled DartClient uses `requests`
 # directly, so these are not required — provided for advanced note parsing.
 dart = ["OpenDartReader>=0.2", "dart-fss>=0.4"]

@@ -20,8 +20,9 @@ class _FakeDart:
 class _FakePipeline:
     captured: dict = {}
 
-    def __init__(self, config=None):
+    def __init__(self, config=None, **kwargs):
         # land-file 코드 해석은 멀티마켓 시임을 위해 pipe.adapter 경유 (KR/JP 공통).
+        # make_pipeline가 price_provider/cache를 주입하므로 **kwargs로 흡수.
         self.adapter = _FakeDart()
         self.dart = self.adapter
         self.cache = None
