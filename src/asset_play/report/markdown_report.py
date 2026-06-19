@@ -374,10 +374,35 @@ def build_company_report(pipe, stock_code: str, *, bsns_year=None,
     labels = getattr(pipe.adapter, "labels", None)
     src = labels.source if labels else "DART 사업보고서"
     ip_label = labels.ip_label if labels else "투자부동산(공정가치 주석)"
+    sections = sections_from_valuations(valuations, review_queue, ip_label=ip_label)
+
+    # 영업용 토지 含み益(公示地価 추정, JP) — 어댑터가 제공하면 별도 섹션(🔴 저신뢰, S2 상한에만 가산).
+    op_fn = getattr(pipe.adapter, "operating_land", None)
+    if op_fn:
+        try:
+            ests = op_fn(cc)
+        except Exception:
+            ests = []
+        op_lines = [
+            AssetLine(
+                label=e.location[:24], book=e.book, est_low=e.book, est_high=e.estimate,
+                confidence=e.confidence,
+                note=(f"{e.matched} · {int(e.price_per_sqm):,}円/㎡" if e.price_per_sqm else e.matched),
+            )
+            # 含み益(숨은 '이익') 추정 — 추정 < 장부(이익 없음)는 제외(감액 테스트 아님)
+            for e in ests if getattr(e, "estimate", None) is not None and e.estimate > e.book
+        ]
+        op_lines.sort(key=lambda ln: ln.gain_high, reverse=True)
+        if op_lines:
+            sections.append(ReportSection(
+                "영업용 토지 含み益 (公示地価 추정)", op_lines,
+                intro="設備현황 + 公示地価/地価調査 추정. 賃貸등不動산(時価 공시분) 제외(중복가드). "
+                      "표본·구 median 근사 → 🔴 저신뢰. 정밀은 큰 필지를 路線価로 사람 확인."))
+
     return CompanyReport(
         name=nav.name, stock_code=nav.stock_code or stock_code,
         market_cap=nav.market_cap, reported_book_equity=nav.reported_book_equity,
-        sections=sections_from_valuations(valuations, review_queue, ip_label=ip_label), screen=screen,
+        sections=sections, screen=screen,
         catalyst_score=nav.catalyst_score, value_trap=nav.catalyst_value_trap,
         source=f"{src}({bsns_year}) · 자동집계",
         asof=nav.as_of_date,

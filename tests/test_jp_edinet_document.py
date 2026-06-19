@@ -5,6 +5,7 @@ from decimal import Decimal
 from asset_play.sources.jp_edinet_document import (
     ChintaiItem,
     parse_chintai_fudosan,
+    parse_facilities_html,
     parse_jp_financials,
 )
 
@@ -85,3 +86,35 @@ def test_parse_jp_financials_consolidated_current_year():
 def test_parse_jp_financials_missing_returns_none():
     f = parse_jp_financials("header\n(빈 문서)")
     assert f["assets"] is None and f["controlling_equity"] is None
+
+
+# 운수 車庫/工場 표(영업용) + 不動産 賃貸 표(賃貸面積 → 제외)
+_FAC_HTML = """
+<table>
+<tr><td rowspan="2">事業所名</td><td rowspan="2">所在地</td><td>建物及び構築物</td><td colspan="2">土地</td></tr>
+<tr><td>帳簿価額（百万円）</td><td>面積（㎡）</td><td>帳簿価額（百万円）</td></tr>
+<tr><td><p>筑紫工場筑紫車庫</p></td><td><p>福岡県筑紫野市</p></td><td>547</td><td>101,559</td><td>808</td></tr>
+<tr><td><p>多々良工場</p></td><td><p>福岡市東区</p></td><td>642</td><td>25,668</td><td>1,282</td></tr>
+</table>
+<table>
+<tr><td rowspan="2">事業所名</td><td rowspan="2">所在地</td><td colspan="2">土地</td><td>賃貸面積（㎡）</td></tr>
+<tr><td>面積（㎡）</td><td>帳簿価額（百万円）</td><td>計</td></tr>
+<tr><td><p>ONE FUKUOKA</p></td><td><p>福岡市中央区</p></td><td>7,619</td><td>16,555</td><td>70,414</td></tr>
+</table>
+"""
+
+
+def test_parse_facilities_html_extracts_operating_excludes_rental():
+    facs = parse_facilities_html(_FAC_HTML)
+    locs = {f["location"]: f for f in facs}
+    assert "福岡市中央区" not in locs              # 賃貸面積 표 → 제외(중복가드)
+    assert locs["福岡県筑紫野市"]["area"] == Decimal("101559")
+    assert locs["福岡県筑紫野市"]["book_yen"] == Decimal("808000000")   # 808백만엔→円
+    assert locs["福岡県筑紫野市"]["category"] == "industrial"           # 車庫/工場
+    assert locs["福岡市東区"]["area"] == Decimal("25668")
+    assert locs["福岡市東区"]["book_yen"] == Decimal("1282000000")
+
+
+def test_parse_facilities_html_empty():
+    assert parse_facilities_html("") == []
+    assert parse_facilities_html("<table><tr><td>所在地</td></tr></table>") == []

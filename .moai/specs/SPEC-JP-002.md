@@ -1,7 +1,7 @@
 # SPEC-JP-002 — 일본 영업용 토지 含み益 추정 (公示地価/地価調査)
 
 - **Tier / Milestone**: 멀티마켓 / M7
-- **Status**: part 1 구현(가격 인덱스+추정) · 후속(設備현황 파서·報告 배선·賃貸등 중복가드)
+- **Status**: 구현 완료(part1 가격 인덱스+추정 · part2 設備현황 type=1 파서+리포트 배선+중복가드)
 - **Intent**: 賃貸등不動산 時価 注記(SPEC-JP-001)에 안 잡히는 **자사전용(영업용) 토지**의 含み益을
   추정. 일본 有報는 BS·設備현황에 토지 **취득원가만** 공시(현재가 없음) → たーちゃん처럼 公示地価로
   직접 추정. 한국 V-World 개별공시지가 경로의 일본판.
@@ -42,5 +42,11 @@
 ## 구현 매핑
 
 - `sources/jp_landprice.py` — `JpLandPriceIndex`, `estimate_operating_land`, `category_of`,
-  `muni_token`, `load_l02_points`, `LandPricePoint`, `OperatingLandEstimate` (part 1, 완료).
-- (후속) 設備현황 파서(jp_edinet_document) + JpAdapter 영업용 토지 섹션(賃貸등 중복가드) + L01 로더.
+  `muni_token`, `load_l02_points`, `LandPricePoint`, `OperatingLandEstimate` (part1).
+- `sources/jp_edinet_document.py` — `parse_facilities_html`(type=1 iXBRL 그리드 파서, colspan/rowspan
+  전개·헤더 기반 土地 컬럼 식별·賃貸面積 표 제외=중복가드) (part2).
+- `sources/jp_edinet.py` — `EdinetClient.get_document_html`(type=1) (part2).
+- `sources/adapter.py` — `JpAdapter(landprice_index=)` + `operating_land()` (part2).
+- `report/markdown_report.py` — '영업용 토지 含み益' 섹션(🟡🔴, est_high=추정 → S2 상한 가산,
+  추정<장부는 제외) (part2).
+- (후속) L01(地価公示) 로더 추가·用途 정밀화·좌표 최근접 매칭.

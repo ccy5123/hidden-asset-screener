@@ -149,15 +149,19 @@ class JpAdapter:
 
     labels = _JP_LABELS
 
-    def __init__(self, edinet, jquants, *, dates: Optional[list] = None) -> None:
+    def __init__(self, edinet, jquants, *, dates: Optional[list] = None,
+                 landprice_index=None) -> None:
         from .jp_edinet import recent_business_dates
 
         self.edinet = edinet
         self.jquants = jquants
         self.dates = dates or recent_business_dates(40)
+        self.landprice_index = landprice_index  # JpLandPriceIndex (영업용 토지 추정용; None이면 미사용)
         self._meta: dict = {}   # stock_code → 有報 메타(dict) | None
         self._csv: dict = {}    # docID → CSV 텍스트
         self._fin: dict = {}    # docID → parse_jp_financials 결과
+        self._html: dict = {}   # docID → 본문 HTML
+        self._opland: dict = {}  # docID → OperatingLandEstimate 리스트
 
     def _yuho(self, stock_code: str) -> Optional[dict]:
         if stock_code not in self._meta:
@@ -223,6 +227,25 @@ class JpAdapter:
         shares = self._financials(m["docID"]).get("shares")
         close = self.jquants.get_latest_close(stock_code) if self.jquants else None
         return shares * close if (shares is not None and close is not None) else None
+
+    def operating_land(self, corp_code: str) -> list:
+        """영업용(자사전용) 토지 含み益 추정 (SPEC-JP-002) — 設備현황 파싱 + 公示地価 인덱스.
+
+        賃貸등不動산(時価 공시분)은 파서가 제외(중복가드). landprice_index 없으면 빈 리스트.
+        """
+        if self.landprice_index is None:
+            return []
+        if corp_code in self._opland:
+            return self._opland[corp_code]
+        from .jp_edinet_document import parse_facilities_html
+        from .jp_landprice import estimate_operating_land
+
+        if corp_code not in self._html:
+            self._html[corp_code] = self.edinet.get_document_html(corp_code) or ""
+        facs = parse_facilities_html(self._html[corp_code])
+        items = [(f["location"], f["area"], f["book_yen"], f["category"]) for f in facs]
+        self._opland[corp_code] = estimate_operating_land(items, self.landprice_index)
+        return self._opland[corp_code]
 
     def price_as_of(self) -> date:
         return date.today()

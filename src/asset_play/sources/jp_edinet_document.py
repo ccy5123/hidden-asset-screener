@@ -149,3 +149,101 @@ def parse_jp_financials(csv_text: str) -> dict:
         "assets": assets, "net_assets": net_assets, "controlling_equity": controlling,
         "net_income": net_income, "shares": shares,
     }
+
+
+# --------------------------------------------------------------------------- #
+# 主要な設備の状況 (type=1 iXBRL HTML) — 영업용 토지 所在地·면적·취득원가 (SPEC-JP-002)
+# --------------------------------------------------------------------------- #
+_TAG = re.compile(r"<[^>]+>")
+_CELL_C = re.compile(r"<t[dh]\b([^>]*?)>(.*?)</t[dh]>", re.DOTALL | re.IGNORECASE)
+_PLACE_C = re.compile(r"[都道府県市区町村]")
+
+
+def _cell_text(s: str) -> str:
+    s = _TAG.sub("", s)
+    s = re.sub(r"&#160;|&nbsp;|　", "", s)
+    return re.sub(r"\s+", "", s).strip()
+
+
+def _table_grid(table_html: str) -> list:
+    """<table>를 2D 그리드로 전개(colspan/rowspan 반영). 각 행은 {col: text}."""
+    grid: list = []
+    carry: dict = {}  # col -> [remaining_rows, text]
+    for r in re.findall(r"<tr\b.*?</tr>", table_html, re.DOTALL | re.IGNORECASE):
+        row: dict = {}
+        col = 0
+        for attrs, inner in _CELL_C.findall(r):
+            while col in carry and carry[col][0] > 0:
+                row[col] = carry[col][1]
+                carry[col][0] -= 1
+                col += 1
+            cs = int(re.search(r'colspan="?(\d+)', attrs).group(1)) if "colspan" in attrs else 1
+            rs = int(re.search(r'rowspan="?(\d+)', attrs).group(1)) if "rowspan" in attrs else 1
+            txt = _cell_text(inner)
+            for c in range(col, col + cs):
+                row[c] = txt
+                if rs > 1:
+                    carry[c] = [rs - 1, txt]
+            col += cs
+        for c in list(carry):
+            if c not in row and carry[c][0] > 0:
+                row[c] = carry[c][1]
+                carry[c][0] -= 1
+        grid.append(row)
+    return grid
+
+
+def _land_num(s: str):
+    s = re.sub(r"（\d+）|\(\d+\)", "", s).replace(",", "")
+    return int(s) if re.fullmatch(r"-?\d+", s) else None
+
+
+def _facility_category(table_flat: str) -> str:
+    if any(k in table_flat for k in ("工場", "車庫", "倉庫", "作業場", "物流", "ロジ")):
+        return "industrial"
+    if any(k in table_flat for k in ("店舗", "ストア", "売場", "百貨店")):
+        return "commercial"
+    return "industrial"  # 보수적 기본(공업지가 주택보다 쌈 → 과대평가 회피)
+
+
+def parse_facilities_html(html: str) -> list:
+    """主要な設備の状況 iXBRL HTML → 영업용 토지 [{location, area㎡, book_yen, category}].
+
+    헤더로 土地 面積/帳簿価額 컬럼을 식별(병합셀 전개). 賃貸面積 테이블(=不動産業 임대,
+    이미 賃貸등不動산 時価에 포함)은 **제외**해 중복계상 방지. 장부는 百万円→円 환산.
+    """
+    out: list = []
+    for table in re.findall(r"<table\b.*?</table>", html or "", re.DOTALL | re.IGNORECASE):
+        flat = _cell_text(table)
+        if not ("所在地" in flat and "土地" in flat and "面積" in flat and "帳簿価額" in flat):
+            continue
+        if "賃貸面積" in flat:  # 不動産業 임대 → 賃貸등不動산 時価 중복 → 제외
+            continue
+        grid = _table_grid(table)
+        ncol = max((max(r) for r in grid if r), default=-1) + 1
+        area_col = book_col = sozai_col = None
+        for r in grid[:4]:
+            for c in range(ncol):
+                v = r.get(c, "")
+                if "面積" in v and not any(x in v for x in ("賃貸", "売場", "延床")):
+                    area_col = c
+                elif "帳簿価額" in v and area_col is not None and c > area_col and book_col is None:
+                    book_col = c
+                if "所在地" in v:
+                    sozai_col = c
+        if area_col is None or book_col is None or sozai_col is None:
+            continue
+        cat = _facility_category(flat)
+        for r in grid:
+            loc = r.get(sozai_col, "")
+            if not (loc and _PLACE_C.search(loc)):
+                continue
+            area = _land_num(r.get(area_col, ""))
+            book_m = _land_num(r.get(book_col, ""))
+            if area and area > 100:
+                out.append({
+                    "location": loc, "area": Decimal(area),
+                    "book_yen": Decimal((book_m or 0)) * Decimal(1_000_000),  # 百万円→円
+                    "category": cat,
+                })
+    return out

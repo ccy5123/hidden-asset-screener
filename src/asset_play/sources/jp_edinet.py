@@ -75,6 +75,27 @@ class EdinetClient(HttpSource):
             return None
         return zf.read(main[0]).decode("utf-16", errors="replace")
 
+    def get_document_html(self, doc_id: str) -> Optional[str]:
+        """documents/{docID}?type=1 → XBRL ZIP → 본문 iXBRL HTML(honbun). 設備현황 표 파싱용.
+
+        type=5 CSV는 표를 평탄화해 셀 경계가 사라지므로, 셀 구조가 살아있는 type=1 사용.
+        """
+        raw = self.get_bytes(
+            f"{EDINET_BASE}/documents/{doc_id}",
+            params={"type": "1", "Subscription-Key": self._key()},
+        )
+        if not raw:
+            return None
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(raw))
+        except zipfile.BadZipFile:
+            return None
+        htmls = [n for n in zf.namelist()
+                 if "honbun" in n.lower() and n.lower().endswith((".htm", ".html"))]
+        if not htmls:
+            return None
+        return "".join(zf.read(n).decode("utf-8", errors="replace") for n in sorted(htmls))
+
     @staticmethod
     def chintai_textblock(csv_text: str) -> str:
         """賃貸等不動産 텍스트블록(HTML 제거) 추출. 없으면 빈 문자열."""
