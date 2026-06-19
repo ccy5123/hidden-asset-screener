@@ -2,12 +2,16 @@
 
 from decimal import Decimal
 
+import json
+
 from asset_play.sources.jp_landprice import (
     JpLandPriceIndex,
     LandPricePoint,
     OperatingLandEstimate,
+    build_index_from_files,
     category_of,
     estimate_operating_land,
+    load_landprice_geojson,
     muni_token,
 )
 
@@ -74,3 +78,31 @@ def test_operating_land_estimate_gain_none_when_uncovered():
     e = OperatingLandEstimate("X", Decimal("100"), Decimal("50"), "industrial",
                               None, None, "low", "미커버")
     assert e.gain is None
+
+
+def test_generic_loader_handles_l01_and_l02_codes(tmp_path):
+    # L02 코드(_022/_025/_006) + L01 코드(_006)+내용탐지 주소/用途 둘 다 인식
+    gj = {"features": [
+        {"properties": {"L02_021": "札幌中央", "L02_022": "北海道　札幌市中央区宮の森",
+                        "L02_025": "住宅", "L02_006": 259000}},
+        {"properties": {"L01_006": 40000, "addr": "福岡県筑紫野市原田", "use": "工場"}},
+    ]}
+    p = tmp_path / "x.geojson"
+    p.write_text(json.dumps(gj), encoding="utf-8")
+    pts = load_landprice_geojson(str(p))
+    munis = {pt.muni: pt for pt in pts}
+    assert "札幌市中央区" in munis and "筑紫野市" in munis
+    assert munis["筑紫野市"].price == Decimal("40000")
+    assert category_of(munis["筑紫野市"].use) == "industrial"   # 工場 내용탐지
+
+
+def test_build_index_from_files_merges(tmp_path):
+    g1 = {"features": [{"properties": {"L02_022": "福岡県筑紫野市原田", "L02_025": "住宅", "L02_006": 90000}}]}
+    g2 = {"features": [{"properties": {"L01_006": 40000, "addr": "福岡県筑紫野市原田", "use": "工場"}}]}
+    p1, p2 = tmp_path / "l02.geojson", tmp_path / "l01.geojson"
+    p1.write_text(json.dumps(g1), encoding="utf-8")
+    p2.write_text(json.dumps(g2), encoding="utf-8")
+    idx = build_index_from_files(str(p1), str(p2))
+    # L01 병합 후 筑紫野市에 工業 표준지 생김 → industrial 직접매칭(🟡)
+    price, conf, matched = idx.price_per_sqm("筑紫野市", "industrial")
+    assert price == Decimal("40000") and conf == "med" and matched == "industrial"

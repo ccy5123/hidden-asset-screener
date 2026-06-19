@@ -125,14 +125,46 @@ def estimate_operating_land(facilities: list, index: JpLandPriceIndex) -> list:
     return out
 
 
-def load_l02_points(geojson_path: str) -> list:
-    """L02(地価調査) GeoJSON → [LandPricePoint]. 価格 L02_006, 用途 L02_025, 주소 L02_022."""
+def _detect_address(props: dict) -> Optional[str]:
+    """프로퍼티 중 都道府県+市区町村 형태의 전체 주소(예: L02_022/L01_xxx) 자동 탐지."""
+    for v in props.values():
+        if isinstance(v, str) and _PREF.match(v.replace("　", "")) and _MUNI.search(v.replace("　", "")):
+            return v
+    return None
+
+
+def _detect_use(props: dict) -> str:
+    """프로퍼티 중 짧은 用途값(住宅/商業/工場/店舗…) 자동 탐지. 없으면 ''."""
+    for v in props.values():
+        if isinstance(v, str) and 0 < len(v) <= 16 and category_of(v) != "other":
+            return v
+    return ""
+
+
+def load_landprice_geojson(geojson_path: str) -> list:
+    """L01(地価公示)/L02(地価調査) GeoJSON → [LandPricePoint] (범용 — 필드코드 무관).
+
+    当年 価格은 L01_006/L02_006(国土数値情報 공통). 주소·用途는 내용으로 탐지 → L01/L02 둘 다 처리.
+    """
     d = json.load(open(geojson_path, encoding="utf-8"))
     points = []
     for f in d.get("features", []):
         p = f.get("properties", {})
-        mu = muni_token(p.get("L02_022"))
-        price = p.get("L02_006")
+        price = p.get("L01_006", p.get("L02_006"))  # 当年 公示価格/基準地価格 (円/㎡)
+        mu = muni_token(_detect_address(p))
         if mu and isinstance(price, (int, float)) and price > 0:
-            points.append(LandPricePoint(muni=mu, use=p.get("L02_025") or "", price=Decimal(int(price))))
+            points.append(LandPricePoint(muni=mu, use=_detect_use(p), price=Decimal(int(price))))
     return points
+
+
+def load_l02_points(geojson_path: str) -> list:
+    """하위호환 별칭 — 범용 로더로 위임."""
+    return load_landprice_geojson(geojson_path)
+
+
+def build_index_from_files(*geojson_paths: str) -> "JpLandPriceIndex":
+    """여러 GeoJSON(L01+L02)을 병합해 단일 인덱스 — 커버리지↑."""
+    pts: list = []
+    for path in geojson_paths:
+        pts.extend(load_landprice_geojson(path))
+    return JpLandPriceIndex(pts)
