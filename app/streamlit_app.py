@@ -91,11 +91,12 @@ def _is_hosted() -> bool:
 
 
 _KEY_SPECS = [
-    ("dart_api_key", "DART (KR 공시·재무)"),
-    ("edinet_key", "EDINET (JP 有報)"),
-    ("jquants_key", "J-Quants (JP 주가)"),
-    ("vworld_key", "V-World (KR 공시지가·면적)"),
-    ("juso_key", "juso (KR 도로명주소)"),
+    ("dart_api_key", "DART (KR 공시·재무, 필수)"),
+    ("edinet_key", "EDINET (JP 有報, JP 필수)"),
+    ("jquants_key", "J-Quants (JP 주가, JP 필수)"),
+    ("vworld_key", "V-World (KR 토지 정밀, 선택)"),
+    ("data_go_kr_key", "data.go.kr (KR 공시지가 폴백, 선택)"),
+    ("juso_key", "juso (KR 도로명주소, 선택)"),
 ]
 
 
