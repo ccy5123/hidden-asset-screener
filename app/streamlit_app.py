@@ -9,17 +9,43 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import streamlit as st
 
-# `streamlit run app/streamlit_app.py` 를 설치 없이도 돌릴 수 있게 src 레이아웃을 경로에 추가.
-_SRC = Path(__file__).resolve().parent.parent / "src"
+# 프로젝트 루트(앱 파일 기준) — 실행 위치(cwd)와 무관하게 .env·.cache·src를 여기에 고정.
+_ROOT = Path(__file__).resolve().parent.parent
+_SRC = _ROOT / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+
+def _bootstrap_env() -> None:
+    """프로젝트 루트의 .env를 os.environ에 주입(실행 위치 무관) — 키를 따로 입력할 필요 없음.
+
+    실제 환경변수가 우선(setdefault). streamlit을 어느 디렉터리에서 띄워도 내 .env가 적용된다.
+    """
+    env = _ROOT / ".env"
+    if not env.is_file():
+        return
+    for raw in env.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        line = line.removeprefix("export ").strip()
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip("'").strip('"')
+        if key:
+            os.environ.setdefault(key, val)
+
+
+_bootstrap_env()
+
 from asset_play.config import Config  # noqa: E402
+from asset_play.exceptions import SourceError  # noqa: E402
 from asset_play.market import make_pipeline, resolve_market  # noqa: E402
 from asset_play.report import frames  # noqa: E402
 from asset_play.report.csv_report import results_to_dataframe  # noqa: E402
@@ -48,7 +74,9 @@ def _sidebar() -> tuple:
     base = Config.from_env()
 
     st.sidebar.subheader("API 키")
-    st.sidebar.caption(".env 값이 우선. 비어 있으면 아래에 입력(세션에만 사용, 저장 안 함).")
+    st.sidebar.caption(
+        f"프로젝트 .env 자동 사용 ({_ROOT / '.env'}). 아래는 .env에 없는 키만 임시 보완(세션에만, 저장 안 함)."
+    )
     key_specs = [
         ("dart_api_key", "DART (KR 공시·재무)"),
         ("edinet_key", "EDINET (JP 有報)"),
@@ -78,12 +106,29 @@ def _sidebar() -> tuple:
     landprice_raw = st.sidebar.text_area("GeoJSON 경로", value=default_lp, height=80)
 
     cfg = Config.from_env()
+    # 캐시를 프로젝트 루트에 고정(실행 위치 무관) — corpCode 동기화 캐시 등 재사용.
+    if not cfg.cache_dir.is_absolute():
+        cfg.cache_dir = _ROOT / cfg.cache_dir
     for field, val in overrides.items():
         setattr(cfg, field, val)
     paths = [p.strip() for p in landprice_raw.replace("\n", ",").split(",") if p.strip()]
     if paths:
         cfg.landprice_files = [Path(p) for p in paths]
     return cfg, market_override, year
+
+
+def _ensure_kr_corpcodes(pipe) -> None:
+    """KR: corpCode↔stock 맵이 없으면 1회 자동 동기화(이후 캐시). 없으면 종목 해석 불가→'데이터 없음'.
+
+    CLI는 `sync-corp-codes`를 먼저 돌리지만, 앱은 사용자가 모르게 자동 처리한다. JP는 불필요.
+    """
+    try:
+        pipe.dart.corp_code_for_stock("000000")  # 미존재 코드 — 맵 존재 여부만 확인(None이면 동기화됨)
+        return
+    except SourceError:
+        pass  # "corp codes not synced" → 아래에서 1회 동기화
+    with st.spinner("DART corpCode 동기화 (최초 1회, 캐시됨)…"):
+        pipe.sync_corp_codes()
 
 
 def _jp_index(cfg: Config):
@@ -190,6 +235,8 @@ def _tab_report(cfg, market_override, year) -> None:
         with st.spinner(f"{market.upper()} 리포트 생성 중…"), use_recorder() as rec:
             try:
                 pipe = make_pipeline(cfg, market, landprice_index=idx)
+                if market == "kr":
+                    _ensure_kr_corpcodes(pipe)
                 report = build_company_report(
                     pipe, code, bsns_year=year, compute_catalyst=catalyst, auto_land=auto_land,
                 )
@@ -232,6 +279,8 @@ def _tab_screen_value(cfg, market_override, year) -> None:
         with st.spinner(f"{market.upper()} 스크린 중…"), use_recorder() as rec:
             try:
                 pipe = make_pipeline(cfg, market)
+                if market == "kr":
+                    _ensure_kr_corpcodes(pipe)
                 results = value_screen(pipe, codes, bsns_year=year, **thr)
             except Exception as exc:  # noqa: BLE001
                 st.error(f"실행 오류: {type(exc).__name__}: {exc}")
@@ -266,6 +315,8 @@ def _tab_rank(cfg, market_override, year) -> None:
         with st.spinner(f"{market.upper()} NAV 집계 중…"), use_recorder() as rec:
             try:
                 pipe = make_pipeline(cfg, market)
+                if market == "kr":
+                    _ensure_kr_corpcodes(pipe)
                 run = pipe.run(stock_codes=codes, bsns_year=year, compute_catalyst=catalyst)
             except Exception as exc:  # noqa: BLE001
                 st.error(f"실행 오류: {type(exc).__name__}: {exc}")

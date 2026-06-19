@@ -17,6 +17,15 @@ def _dart(session, cache=None):
     return DartClient(Config(dart_api_key="testkey"), session=session, cache=cache or CacheStore())
 
 
+def test_corp_code_for_stock_raises_when_not_synced():
+    # corpCode 미동기화 시 SourceError — 앱(_ensure_kr_corpcodes)이 이 신호로 1회 자동 동기화한다.
+    from asset_play.exceptions import SourceError
+
+    dart = _dart(FakeSession([]), cache=CacheStore())  # 빈 캐시 → 맵 없음
+    with pytest.raises(SourceError):
+        dart.corp_code_for_stock("000050")
+
+
 def test_sync_corp_codes_builds_mapping():  # AC-1
     zip_bytes = make_corpcode_zip(
         [
