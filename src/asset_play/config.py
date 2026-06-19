@@ -53,6 +53,8 @@ class Config(BaseModel):
     data_go_kr_key: Optional[str] = None
     vworld_key: Optional[str] = None
     juso_key: Optional[str] = None  # 행안부 도로명주소 검색API (도로명→지번/PNU)
+    edinet_key: Optional[str] = None  # EDINET API v2 (JP 有報 XBRL) — Subscription-Key
+    jquants_key: Optional[str] = None  # J-Quants V2 (JP 주가) — x-api-key
 
     # Optional user name-alias DB merged over the packaged default (investee→stock matching).
     name_aliases_path: Optional[Path] = None
@@ -114,6 +116,8 @@ class Config(BaseModel):
             data_go_kr_key=e.get("ASSET_PLAY_DATA_GO_KR_KEY") or None,
             vworld_key=e.get("ASSET_PLAY_VWORLD_KEY") or None,
             juso_key=e.get("ASSET_PLAY_JUSO_KEY") or None,
+            edinet_key=e.get("ASSET_PLAY_EDINET_KEY") or None,
+            jquants_key=e.get("ASSET_PLAY_JQUANTS_KEY") or None,
             name_aliases_path=(
                 Path(e["ASSET_PLAY_NAME_ALIASES"]) if e.get("ASSET_PLAY_NAME_ALIASES") else None
             ),

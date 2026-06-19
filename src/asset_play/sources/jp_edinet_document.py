@@ -96,3 +96,56 @@ def parse_chintai_fudosan(text_block: str) -> list:
             book=b, fair=f, mixed_use=(idx > 0),
         ))
     return items
+
+
+# --------------------------------------------------------------------------- #
+# EDINET XBRL_TO_CSV 財務 추출 (스크린 1단계용; J-Quants 무료는 財務 제외)
+# --------------------------------------------------------------------------- #
+def _csv_find(
+    csv_text: str, short: str, *, cons: Optional[str] = None,
+    ctx_exact: Optional[str] = None, ctx_prefix: Optional[str] = None,
+) -> Optional[Decimal]:
+    """EDINET CSV(탭구분)에서 (요소ID 끝부분 × 연결구분 × 컨텍스트) 매칭 첫 수치(円)."""
+    for ln in csv_text.splitlines():
+        cols = [c.strip('"') for c in ln.split("\t")]
+        if len(cols) < 9:
+            continue
+        eid, ctx, c, val = cols[0], cols[2], cols[4], cols[8]
+        if eid.split(":")[-1] != short:
+            continue
+        if cons and c != cons:
+            continue
+        if ctx_exact and ctx != ctx_exact:
+            continue
+        if ctx_prefix and not ctx.startswith(ctx_prefix):
+            continue
+        d = _to_won_yen(val)
+        if d is not None:
+            return d
+    return None
+
+
+def parse_jp_financials(csv_text: str) -> dict:
+    """EDINET XBRL CSV → 連結 当期 재무(円): 자산총계·순자산·지배지분·순이익·발행주식수.
+
+    NAV/스크린 정합: 한국 연결(CFS) 기준에 맞춰 連結 사용. 지배지분=純資産−非支配持分.
+    값은 EDINET XBRL 원본이 円 단위(콤마 없음) — 별도 단위보정 불필요.
+    """
+    assets = _csv_find(csv_text, "Assets", cons="連結", ctx_exact="CurrentYearInstant")
+    net_assets = _csv_find(csv_text, "NetAssets", cons="連結", ctx_exact="CurrentYearInstant")
+    nci = _csv_find(csv_text, "NonControllingInterests", cons="連結", ctx_exact="CurrentYearInstant")
+    net_income = _csv_find(
+        csv_text, "ProfitLossAttributableToOwnersOfParent", cons="連結",
+        ctx_exact="CurrentYearDuration",
+    )
+    shares = _csv_find(
+        csv_text, "TotalNumberOfIssuedSharesSummaryOfBusinessResults",
+        ctx_prefix="CurrentYearInstant",
+    )
+    controlling = (
+        net_assets - nci if (net_assets is not None and nci is not None) else net_assets
+    )
+    return {
+        "assets": assets, "net_assets": net_assets, "controlling_equity": controlling,
+        "net_income": net_income, "shares": shares,
+    }

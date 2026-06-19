@@ -2,7 +2,11 @@
 
 from decimal import Decimal
 
-from asset_play.sources.jp_edinet_document import ChintaiItem, parse_chintai_fudosan
+from asset_play.sources.jp_edinet_document import (
+    ChintaiItem,
+    parse_chintai_fudosan,
+    parse_jp_financials,
+)
 
 # 西日本鉄道 2026-03기 有報 賃貸等不動産 텍스트블록 실제 발췌 (単위：百万円). 숫자는 前期当期 연접.
 NISHITETSU = (
@@ -49,3 +53,35 @@ def test_empty_or_omission_textblock_yields_nothing():
 def test_chintai_item_gain():
     it = ChintaiItem(label="x", book=Decimal("100"), fair=Decimal("250"), mixed_use=False)
     assert it.gain == Decimal("150")
+
+
+def _row(eid, ctx, cons, val):
+    # 要素ID 項目名 コンテキスト 相対 連結個別 期間時点 ユニット 単위 値
+    return "\t".join(f'"{c}"' for c in [eid, "item", ctx, "-", cons, "-", "u", "円", val])
+
+
+# 西日本鉄道 連結 当期 실값(円). 세그먼트 Assets(접미사 ctx) noise도 넣어 정확매칭 검증.
+JP_FIN_CSV = "\n".join([
+    "header",
+    _row("jppfs_cor:Assets", "CurrentYearInstant_ReportableSegment", "連結", "710728000000"),  # noise
+    _row("jppfs_cor:Assets", "CurrentYearInstant", "連結", "820851000000"),
+    _row("jppfs_cor:NetAssets", "CurrentYearInstant", "連結", "293044000000"),
+    _row("jpcrp_cor:NonControllingInterests", "CurrentYearInstant", "連結", "8958000000"),
+    _row("jpcrp_cor:ProfitLossAttributableToOwnersOfParent", "CurrentYearDuration", "連結", "32155000000"),
+    _row("jpcrp_cor:TotalNumberOfIssuedSharesSummaryOfBusinessResults",
+         "CurrentYearInstant_NonConsolidatedMember", "その他", "79360000"),
+])
+
+
+def test_parse_jp_financials_consolidated_current_year():
+    f = parse_jp_financials(JP_FIN_CSV)
+    assert f["assets"] == Decimal("820851000000")        # 정확매칭(세그먼트 noise 무시)
+    assert f["net_assets"] == Decimal("293044000000")
+    assert f["controlling_equity"] == Decimal("284086000000")  # 純資産−非支配持分
+    assert f["net_income"] == Decimal("32155000000")
+    assert f["shares"] == Decimal("79360000")
+
+
+def test_parse_jp_financials_missing_returns_none():
+    f = parse_jp_financials("header\n(빈 문서)")
+    assert f["assets"] is None and f["controlling_equity"] is None
