@@ -43,6 +43,58 @@ def _split(value: Optional[str]) -> list[str]:
     return [v.strip() for v in (value or "").split(",") if v.strip()]
 
 
+def detect_market(code: str, override: Optional[str] = None) -> str:
+    """종목코드 자리수로 시장 판별 — JP 티커=4자리, KR 종목=6자리(corp_code=8). override 우선.
+
+    KR과 JP는 종목코드 자리수가 달라 충돌하지 않는다(사용자 관찰). 4자리만 JP, 나머지는 KR.
+    """
+    if override:
+        ov = override.strip().lower()
+        if ov not in ("kr", "jp"):
+            raise SystemExit(f"unknown --market {override!r} (use kr|jp)")
+        return ov
+    return "jp" if len(code.strip()) == 4 else "kr"
+
+
+def _resolve_market(codes: list[str], override: Optional[str]) -> str:
+    """여러 코드의 시장을 판별 — 모두 같은 시장이어야 함(한 파이프라인=한 어댑터). 비면 KR 기본."""
+    if override:
+        return detect_market("", override)
+    markets = {detect_market(c) for c in codes if c}
+    if len(markets) > 1:
+        raise SystemExit(
+            "한 번에 한 시장만: KR(6자리)·JP(4자리) 종목을 섞지 마세요 (또는 --market kr|jp)"
+        )
+    return markets.pop() if markets else "kr"
+
+
+def _make_pipeline(config: Config, market: str, *, extra_landprice: Optional[list[str]] = None):
+    """시장에 맞는 어댑터를 주입한 Pipeline. KR=기본(DART+KRX), JP=EDINET+J-Quants(+公示地価)."""
+    from .pipeline import Pipeline
+
+    if market != "jp":
+        return Pipeline(config)
+
+    from .cache import CacheStore
+    from .sources.adapter import JpAdapter
+    from .sources.jp_edinet import EdinetClient, JQuantsClient, recent_business_dates
+
+    cache = CacheStore(str(config.cache_dir / "asset_play.sqlite"))
+    files = list(extra_landprice or []) + [str(p) for p in (config.landprice_files or [])]
+    index = None
+    if files:
+        from .sources.jp_landprice import build_index_from_files
+
+        index = build_index_from_files(*files)  # 영업용 토지 公示地価 인덱스 (없으면 None=섹션 생략)
+    adapter = JpAdapter(
+        EdinetClient(config, cache=cache),
+        JQuantsClient(config, cache=cache),
+        dates=recent_business_dates(40),
+        landprice_index=index,
+    )
+    return Pipeline(config, adapter=adapter, cache=cache)
+
+
 def _cmd_sync(args: argparse.Namespace) -> int:
     from .pipeline import Pipeline
 
@@ -54,8 +106,6 @@ def _cmd_sync(args: argparse.Namespace) -> int:
 
 
 def _cmd_screen(args: argparse.Namespace) -> int:
-    from .pipeline import Pipeline
-
     config = Config.from_env()
     if args.universe:
         try:
@@ -64,9 +114,11 @@ def _cmd_screen(args: argparse.Namespace) -> int:
             print(f"unknown universe: {args.universe}", file=sys.stderr)
             return 2
 
-    pipe = Pipeline(config)
     stock_codes = _split(args.stock)
     corp_codes = _split(args.corp)
+    # 시장 판별(KR 6자리 / JP 4자리) — corp_code(8자리)는 KR로 판정됨. 섞이면 거부.
+    market = _resolve_market(stock_codes, getattr(args, "market", None))
+    pipe = _make_pipeline(config, market, extra_landprice=getattr(args, "landprice_files", None))
 
     if not stock_codes and not corp_codes and args.all:
         rows = pipe.cache.get_json("dart:corpcode", "all") or pipe.sync_corp_codes()
@@ -83,7 +135,7 @@ def _cmd_screen(args: argparse.Namespace) -> int:
             cc = code if len(code) == 8 else None
             if cc is None:
                 try:
-                    cc = pipe.dart.corp_code_for_stock(code)
+                    cc = pipe.adapter.corp_code_for_stock(code)
                 except SourceError:
                     cc = None
             if not cc:
@@ -145,10 +197,11 @@ def _cmd_screen(args: argparse.Namespace) -> int:
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
-    from .pipeline import Pipeline
     from .report.markdown_report import build_company_report, write_markdown
 
-    pipe = Pipeline(Config.from_env())
+    config = Config.from_env()
+    market = _resolve_market([args.stock], getattr(args, "market", None))
+    pipe = _make_pipeline(config, market, extra_landprice=getattr(args, "landprice_files", None))
     land_by_corp: dict = {}
     if args.land_file:
         from .land_file import load_land_assets
@@ -157,7 +210,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
             cc = code if len(code) == 8 else None
             if cc is None:
                 try:
-                    cc = pipe.dart.corp_code_for_stock(code)
+                    cc = pipe.adapter.corp_code_for_stock(code)
                 except SourceError:
                     cc = None
             if cc:
@@ -191,14 +244,14 @@ def _cmd_report(args: argparse.Namespace) -> int:
 
 
 def _cmd_screen_value(args: argparse.Namespace) -> int:
-    from .pipeline import Pipeline
     from .valuation.screen import value_screen
 
     stock_codes = _split(args.stock)
     if not stock_codes:
         print("pass --stock 000050,001130,...", file=sys.stderr)
         return 2
-    pipe = Pipeline(Config.from_env())
+    market = _resolve_market(stock_codes, getattr(args, "market", None))
+    pipe = _make_pipeline(Config.from_env(), market)
     thr = dict(pbr_max=Decimal(str(args.pbr)), equity_ratio_min=Decimal(str(args.equity_ratio)))
     if args.per is not None:
         thr["per_max"] = Decimal(str(args.per))
@@ -226,6 +279,18 @@ def _cmd_screen_value(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_market_args(p: argparse.ArgumentParser) -> None:
+    """JP 멀티마켓 공통 플래그 — 시장 강제 + 公示地価 GeoJSON 경로(영업용 토지 추정용)."""
+    p.add_argument("--market", help="시장 강제 지정 kr|jp (기본: 종목코드 자리수로 자동판별)")
+    p.add_argument(
+        "--landprice-file",
+        dest="landprice_files",
+        action="append",
+        help="(JP) 国土数値情報 L01/L02 GeoJSON 경로 — 반복 지정 가능. "
+        "ASSET_PLAY_LANDPRICE_FILES 환경변수와 병합. 없으면 영업용 토지 추정 생략.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="asset-play", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -251,6 +316,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="카탈리스트 점수 산출 (밸류업·자사주·배당 공시 검색, 종목당 DART 호출 +1)",
     )
     screen.add_argument("--out", default="out", help="출력 디렉터리 (기본: out)")
+    _add_market_args(screen)
     screen.set_defaults(func=_cmd_screen)
 
     report = sub.add_parser("report", help="종목별 자산가치 점검 Markdown 보고서 (range + 신뢰도)")
@@ -275,6 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="review_model",
         help="검수 모델 (옵션, 예: opus); 미지정 시 claude CLI 기본값",
     )
+    _add_market_args(report)
     report.set_defaults(func=_cmd_report)
 
     sv = sub.add_parser("screen-value", help="자산가치주 1차 스크린 (PBR·자기자본비율·PER·창업연도)")
@@ -286,6 +353,7 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--founded-before", dest="founded_before", type=int,
                     help="창업연도 상한 (옵션, 오래된 회사)")
     sv.add_argument("--year", help="사업연도 (기본: 작년)")
+    sv.add_argument("--market", help="시장 강제 지정 kr|jp (기본: 종목코드 자리수로 자동판별)")
     sv.set_defaults(func=_cmd_screen_value)
     return parser
 

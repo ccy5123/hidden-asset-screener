@@ -40,10 +40,12 @@ pip install -e ".[dev,krx]"      # + KRX 시세(FinanceDataReader/pykrx)
 cp .env.example .env             # API 키 입력 (모두 무료)
 ```
 
-## 사용 (CLI — 한국)
+## 사용 (CLI — 한국·일본 공용)
+
+같은 `asset-play` CLI가 KR·JP를 모두 구동한다. **종목코드 자리수로 시장을 자동판별** — KR 6자리(예 `000050`), JP 4자리(예 `9031`). 자동판별이 틀리면 `--market kr|jp`로 강제.
 
 ```bash
-asset-play sync-corp-codes                              # DART corpCode ↔ stock_code 동기화
+asset-play sync-corp-codes                              # (KR) DART corpCode ↔ stock_code 동기화
 
 # 1단계 — 자산가치주 스크린 (PBR·자기자본비율·PER·창업연도)
 asset-play screen-value --stock 000050,000950,004370 --per 12 --founded-before 1980
@@ -53,6 +55,7 @@ asset-play report --stock 000050 --auto-land --catalyst --out out/
 #   --auto-land : 사업보고서 별도 투자부동산 공정가치 주석을 자동 추출(BS 대사) → 토지 含み益
 #   --catalyst  : 밸류업·자사주·배당 공시로 카탈리스트 점수
 #   --land-file : 검토한 토지값 수동 주입(human-in-loop)
+#   --review    : 생성 후 Claude CLI로 적대적 검수 (기본 off) → 별도 _review.md
 
 # 전체 유니버스 NAV 랭킹 → CSV/HTML
 asset-play screen --universe KOSPI --land-file land.json --out out/
@@ -60,6 +63,22 @@ pytest
 ```
 
 경방 예시 출력: PBR 0.29 · 자기자본 65% · 창업 1919 → ✅ 통과 → 타임스퀘어 투자부동산 **장부 3,313억 → 공정 7,453억(+4,140억 🟢)**, nav_discount 81.3%.
+
+### 일본 (CLI — 4자리 코드면 자동으로 JP)
+
+```bash
+# 西日本鉄道(9031) — 4자리라 자동으로 JpAdapter(EDINET+J-Quants) 경로
+asset-play report --stock 9031 --auto-land --out out/
+#   → 賃貸등不動산 時価 주석(🟢) 자동 반영. 영업용 토지 含み益(公示地価 추정 🟡🔴)은
+#     国土数値情報 L01/L02 GeoJSON을 줄 때만:
+asset-play report --stock 9031 --auto-land \
+  --landprice-file L01-25.geojson --landprice-file L02-25.geojson --out out/
+#   (또는 ASSET_PLAY_LANDPRICE_FILES 환경변수로 경로 지정)
+
+asset-play screen-value --stock 9031,8801,8830        # JP 1차 스크린(PBR·자기자본비율·PER)
+```
+
+> JP v1 한계(정직): 創業연도(미공시→`--founded-before` 미적용)·타법인출자 지분평가·카탈리스트·`sync-corp-codes`는 KR 전용. 영업용 토지는 GeoJSON 없으면 賃貸등不動산 時価만, 정밀은 사람이 路線価図로.
 
 ## 멀티마켓 (SPEC-ADAPTER-001)
 

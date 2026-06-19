@@ -21,7 +21,9 @@ class _FakePipeline:
     captured: dict = {}
 
     def __init__(self, config=None):
-        self.dart = _FakeDart()
+        # land-file 코드 해석은 멀티마켓 시임을 위해 pipe.adapter 경유 (KR/JP 공통).
+        self.adapter = _FakeDart()
+        self.dart = self.adapter
         self.cache = None
 
     def run_and_report(self, **kwargs):

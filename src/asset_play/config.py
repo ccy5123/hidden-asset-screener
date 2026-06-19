@@ -56,6 +56,9 @@ class Config(BaseModel):
     edinet_key: Optional[str] = None  # EDINET API v2 (JP 有報 XBRL) — Subscription-Key
     jquants_key: Optional[str] = None  # J-Quants V2 (JP 주가) — x-api-key
 
+    # JP 영업용 토지 公示地価/地価調査 GeoJSON(L01/L02) 경로들 — 비면 영업용 토지 추정 생략(graceful).
+    landprice_files: list[Path] = Field(default_factory=list)
+
     # Optional user name-alias DB merged over the packaged default (investee→stock matching).
     name_aliases_path: Optional[Path] = None
 
@@ -105,6 +108,11 @@ class Config(BaseModel):
             raw = e.get(name)
             return Decimal(raw) if raw not in (None, "") else default
 
+        def _paths(name: str) -> list[Path]:
+            # 콤마 또는 OS 경로구분자(:/;)로 분리 — 빈 항목은 무시.
+            raw = (e.get(name) or "").replace(os.pathsep, ",")
+            return [Path(c.strip()) for c in raw.split(",") if c.strip()]
+
         universe_raw = (e.get("ASSET_PLAY_UNIVERSE") or "KOSPI").strip().upper()
         try:
             universe = Market(universe_raw) if universe_raw != "ALL" else Market.UNKNOWN
@@ -118,6 +126,7 @@ class Config(BaseModel):
             juso_key=e.get("ASSET_PLAY_JUSO_KEY") or None,
             edinet_key=e.get("ASSET_PLAY_EDINET_KEY") or None,
             jquants_key=e.get("ASSET_PLAY_JQUANTS_KEY") or None,
+            landprice_files=_paths("ASSET_PLAY_LANDPRICE_FILES"),
             name_aliases_path=(
                 Path(e["ASSET_PLAY_NAME_ALIASES"]) if e.get("ASSET_PLAY_NAME_ALIASES") else None
             ),
