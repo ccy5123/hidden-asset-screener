@@ -20,11 +20,12 @@ from decimal import Decimal
 from typing import Optional
 
 # 시설 用途 → 카테고리. 標準地 用途(L02_025: '住宅','工場','住宅,店舗' 등)도 같은 키워드로 분류.
-_INDUSTRIAL = ("工場", "倉庫", "作業場", "車庫", "物流", "工業")
-_COMMERCIAL = ("商業", "店舗", "事務所", "銀行", "旅館", "ホテル", "百貨店", "ビル", "ターミナル")
-_RESIDENTIAL = ("住宅", "医院", "マンション", "居住", "シニア")
-# 직접매칭 없을 때 ALL median에 곱하는 보수 할인(공업지<주택지).
-_DISCOUNT = {"industrial": Decimal("0.6"), "commercial": Decimal("0.85"), "residential": Decimal("1")}
+_INDUSTRIAL = ("工場", "倉庫", "作業場", "車庫", "物流", "工業", "準工", "工専", "ロジ", "センター", "営業所")
+_COMMERCIAL = ("商業", "店舗", "事務所", "銀行", "旅館", "ホテル", "百貨店", "ビル",
+               "ターミナル", "近商", "オフィス", "テナント", "給油")
+_RESIDENTIAL = ("住宅", "医院", "マンション", "居住", "シニア", "アパート", "宅地")
+# 用途 표준지 없을 때 기준 median에 곱하는 보수 할인(공업지<주택지<상업지). 기준=주거 median 우선.
+_DISCOUNT = {"industrial": Decimal("0.6"), "commercial": Decimal("1.3"), "residential": Decimal("1")}
 
 _PREF = re.compile(r"^(東京都|北海道|京都府|大阪府|.{2,3}県)")
 _MUNI = re.compile(r"(\S+?市\S*?区|\S+?市|\S+?区|\S+?郡\S+?[町村]|\S+?[町村])")
@@ -82,18 +83,26 @@ class JpLandPriceIndex:
         return None
 
     def price_per_sqm(self, muni: Optional[str], category: str) -> tuple:
-        """(円/㎡ Decimal|None, confidence 'med'|'low', matched 설명)."""
+        """(円/㎡ Decimal|None, confidence 'med'|'low', matched 설명).
+
+        用途 직접매칭(med) 우선. 없으면 **주거 median**(가장 흔한 표준지) 기준 × 用途 비율로 보수 추정.
+        주거도 없으면 ALL median × 비율. (공업≈주거×0.6, 상업≈주거×1.3)
+        """
         b = self._bucket(muni)
         if not b:
             return (None, "low", "미커버")
         if b.get(category):
             return (Decimal(int(statistics.median(b[category]))), "med", category)
-        allp = b.get("ALL")
-        if not allp:
+        base = b.get("residential")
+        base_label = "주거"
+        if not base:
+            base = b.get("ALL")
+            base_label = "전체"
+        if not base:
             return (None, "low", "미커버")
-        disc = _DISCOUNT.get(category, Decimal("0.7"))
-        price = (Decimal(int(statistics.median(allp))) * disc).quantize(Decimal(1))
-        return (price, "low", f"ALL×{disc}(用途 표준지 없음)")
+        disc = _DISCOUNT.get(category, Decimal("0.8"))
+        price = (Decimal(int(statistics.median(base))) * disc).quantize(Decimal(1))
+        return (price, "low", f"{base_label}×{disc}(用途 표준지 없음)")
 
 
 @dataclass

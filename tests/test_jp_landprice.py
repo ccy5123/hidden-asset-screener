@@ -52,9 +52,9 @@ def test_price_per_sqm_uses_matching_use():
 
 def test_price_per_sqm_conservative_discount_fallback():
     idx = _index()
-    # 福岡市東区 industrial → 工業 표준지 없음 → ALL median(112,000)×0.6 = 67,200, 🔴
+    # 福岡市東区 industrial → 工業 표준지 없음 → 주거 median(112,000)×0.6 = 67,200, 🔴
     price, conf, matched = idx.price_per_sqm("福岡市東区", "industrial")
-    assert price == Decimal("67200") and conf == "low" and "ALL×0.6" in matched
+    assert price == Decimal("67200") and conf == "low" and "주거×0.6" in matched
 
 
 def test_price_per_sqm_uncovered():
